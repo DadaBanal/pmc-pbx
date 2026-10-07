@@ -127,7 +127,7 @@ jobs:
           ls -ln /var/lib/pmc-pbx/out/asterisk
           /usr/sbin/asterisk -rx 'pjsip show endpoints' | tee /tmp/ep2.txt
           grep -q '1000/1000' /tmp/ep2.txt
-          /usr/sbin/asterisk -rx 'dialplan show pmc-internal' | grep -q "'1000' => hint"
+          /usr/sbin/asterisk -rx 'dialplan show pmc-internal' | tee /tmp/dp2.txt | grep -qE "'1000' => +hint: PJSIP/1000"
           curl -sk -b /tmp/jar https://127.0.0.1:8443/api/status | tee /tmp/status.json; echo
           grep -q '"ext":"1000"' /tmp/status.json
           grep -q '"pending":false' /tmp/status.json
