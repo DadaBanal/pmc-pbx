@@ -5,6 +5,8 @@
   const $ = sel => document.querySelector(sel);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const MODELS = { T31P: 'Yealink T31P desk phone', T33G: 'Yealink T33G desk phone', softphone: 'Software phone', none: 'No phone yet' };
+  // Engine states: "Not in use", "In use", "Busy", "Ringing", "On hold", "Unavailable", "Invalid". Only the first word decides.
+  const onCall = state => /^(in use|busy|ringing|on hold)/i.test(String(state || '').trim());
 
   async function api(method, path, body) {
     const opt = { method, headers: { 'X-PMC-PBX': '1' }, credentials: 'same-origin' };
@@ -88,7 +90,7 @@
     const rows = S.dir.extensions.filter(e => !q || [e.ext, e.name, e.dept, e.mac, e.site].join(' ').toLowerCase().includes(q))
       .sort((a, b) => a.ext.localeCompare(b.ext));
     const live = new Map(((S.status && S.status.endpoints) || []).map(p => [p.ext, p]));
-    const stateOf = e => { const p = live.get(e.ext); if (!p) return '<span class="state off">Not applied</span>'; if (/in use|ringing|busy/i.test(p.state)) return '<span class="state call">On a call</span>'; return p.registered ? '<span class="state on">Online</span>' : '<span class="state off">Offline</span>'; };
+    const stateOf = e => { const p = live.get(e.ext); if (!p) return '<span class="state off">Not applied</span>'; if (onCall(p.state)) return '<span class="state call">On a call</span>'; return p.registered ? '<span class="state on">Online</span>' : '<span class="state off">Offline</span>'; };
     $('#main').innerHTML = '<div class="card"><div class="toolbar"><input type="search" id="q" placeholder="Search by number, name, department or phone" value="' + esc(S.search) + '">' +
       (can('editor') ? '<button class="btn primary" id="add">Add a phone</button>' : '') +
       (can('editor') ? '<button class="btn" id="apply"' + (S.status && !S.status.pending ? ' disabled' : '') + '>Apply changes</button>' : '') + '</div>' +
@@ -201,7 +203,7 @@
         ' &middot; Active calls: ' + (st.engine.activeCalls == null ? '?' : st.engine.activeCalls) + ' &middot; Applied version ' + esc(st.appliedVersion) + (st.pending ? ' (directory is at ' + st.directoryVersion + ', not yet applied)' : '') +
         ' &middot; Certificate ' + st.certDaysLeft + ' days left &middot; refreshes every 10 s</p>' +
         (rows.length ? '<table><thead><tr><th class="num">Number</th><th>Name</th><th>Department</th><th>Status</th><th>Phone address</th><th class="num">Response (ms)</th></tr></thead><tbody>' +
-          rows.map(p => '<tr><td class="num mono">' + esc(p.ext) + '</td><td>' + esc(p.name || '') + '</td><td>' + esc(p.dept || '') + '</td><td>' + (/in use|ringing|busy/i.test(p.state) ? '<span class="state call">On a call</span>' : p.registered ? '<span class="state on">Online</span>' : '<span class="state off">Offline</span>') + '</td><td class="mono">' + esc(p.host || '') + '</td><td class="num">' + (p.rtt == null ? '' : p.rtt.toFixed(0)) + '</td></tr>').join('') +
+          rows.map(p => '<tr><td class="num mono">' + esc(p.ext) + '</td><td>' + esc(p.name || '') + '</td><td>' + esc(p.dept || '') + '</td><td>' + (onCall(p.state) ? '<span class="state call">On a call</span>' : p.registered ? '<span class="state on">Online</span>' : '<span class="state off">Offline</span>') + '</td><td class="mono">' + esc(p.host || '') + '</td><td class="num">' + (p.rtt == null ? '' : p.rtt.toFixed(0)) + '</td></tr>').join('') +
           '</tbody></table>' : '<div class="empty">Nothing applied to the engine yet.</div>') + '</div>';
     };
     draw();

@@ -17,6 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const http = require('http');
 const crypto = require('crypto');
 const { loadConfig } = require('./lib/config');
 const { Store } = require('./lib/store');
@@ -79,6 +80,10 @@ function start(cfg, opts) {
   const key = fs.readFileSync(cfg.keyFile);
   const certInfo = new crypto.X509Certificate(cert);
   const tls = { cert, key, minVersion: 'TLSv1.2' };
+  // Preview mode: the admin screen over plain HTTP, allowed on the loopback address only (laptop demo, browser
+  // panes that refuse a self-signed certificate). Never for the public listener, never on a LAN address.
+  const adminPlain = !!cfg.admin.insecureHttp && /^(127\.0\.0\.1|localhost|::1)$/.test(cfg.admin.host);
+  if (cfg.admin.insecureHttp && !adminPlain) throw new Error('admin.insecureHttp is only allowed with admin.host 127.0.0.1, localhost or ::1');
   const provBans = new H.BanList(cfg.banAfter, cfg.banWindowSec, cfg.banSec);
   const loginBans = new H.BanList(cfg.banAfter, cfg.banWindowSec, cfg.banSec);
   const startedAt = Date.now();
@@ -137,7 +142,7 @@ function start(cfg, opts) {
 
   const routes = [
     ['GET', /^\/api\/me$/, 'viewer', ctx => ({ name: ctx.user.name, role: ctx.user.role })],
-    ['POST', /^\/api\/logout$/, 'viewer', ctx => { ctx.res.setHeader('Set-Cookie', H.cookie(COOKIE, '', 0)); return { ok: true }; }],
+    ['POST', /^\/api\/logout$/, 'viewer', ctx => { ctx.res.setHeader('Set-Cookie', H.cookie(COOKIE, '', 0, !adminPlain)); return { ok: true }; }],
     ['GET', /^\/api\/directory$/, 'viewer', () => V.normalizeDirectory(store.loadDirectory())],
     ['GET', /^\/api\/extensions\/next$/, 'editor', ctx => ({ ext: V.nextFreeExt(V.normalizeDirectory(store.loadDirectory()), ctx.url.searchParams.get('dept') || '') })],
     ['POST', /^\/api\/extensions$/, 'editor', async ctx => {
@@ -269,7 +274,7 @@ function start(cfg, opts) {
         return H.sendJson(res, 401, { error: 'wrong name or password' });
       }
       loginBans.clear(ip);
-      res.setHeader('Set-Cookie', H.cookie(COOKIE, auth.makeToken(getSecrets().session, user.name, cfg.admin.sessionHours), cfg.admin.sessionHours * 3600));
+      res.setHeader('Set-Cookie', H.cookie(COOKIE, auth.makeToken(getSecrets().session, user.name, cfg.admin.sessionHours), cfg.admin.sessionHours * 3600, !adminPlain));
       store.audit({ who: user.name, action: 'sign in', detail: 'from ' + ip });
       log('admin ' + ip + ' login ' + user.name);
       return H.sendJson(res, 200, { name: user.name, role: user.role });
@@ -299,11 +304,12 @@ function start(cfg, opts) {
   }
 
   const publicServer = https.createServer(tls, provisioning);
-  const adminServer = https.createServer(tls, (req, res) => {
+  const adminHandler = (req, res) => {
     admin(req, res).catch(err => { log('ERROR ' + (err && err.stack || err)); if (!res.headersSent) H.sendJson(res, 500, { error: 'server error' }); });
-  });
+  };
+  const adminServer = adminPlain ? http.createServer(adminHandler) : https.createServer(tls, adminHandler);
   publicServer.listen(cfg.listen.port, cfg.listen.host, () => log('provisioning listener on ' + cfg.listen.host + ':' + publicServer.address().port + ' for ' + cfg.fqdn + ', certificate valid to ' + certInfo.validTo));
-  adminServer.listen(cfg.admin.port, cfg.admin.host, () => log('admin screen on https://' + cfg.admin.host + ':' + adminServer.address().port + '/'));
+  adminServer.listen(cfg.admin.port, cfg.admin.host, () => log('admin screen on ' + (adminPlain ? 'http' : 'https') + '://' + cfg.admin.host + ':' + adminServer.address().port + '/' + (adminPlain ? '  (PREVIEW MODE, plain HTTP on loopback only)' : '')));
 
   return {
     publicServer, adminServer, store,

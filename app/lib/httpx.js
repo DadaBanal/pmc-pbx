@@ -38,8 +38,8 @@ function parseCookies(req) {
   return out;
 }
 
-function cookie(name, value, maxAgeSec) {
-  return name + '=' + encodeURIComponent(value) + '; Path=/; HttpOnly; Secure; SameSite=Strict' + (maxAgeSec != null ? '; Max-Age=' + maxAgeSec : '');
+function cookie(name, value, maxAgeSec, secure) {
+  return name + '=' + encodeURIComponent(value) + '; Path=/; HttpOnly; ' + (secure === false ? '' : 'Secure; ') + 'SameSite=Strict' + (maxAgeSec != null ? '; Max-Age=' + maxAgeSec : '');
 }
 
 function basicCreds(req) {
