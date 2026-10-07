@@ -1,6 +1,6 @@
 [Unit]
-Description=PMC PBX provisioning and health server
-After=network-online.target
+Description=PMC PBX: provisioning listener and the PMC Phones admin screen
+After=network-online.target asterisk.service
 Wants=network-online.target
 
 [Service]
@@ -19,8 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadOnlyPaths=/etc/pmc-pbx
-ReadWritePaths=/var/lib/pmc-pbx
+ReadWritePaths=/etc/pmc-pbx /var/lib/pmc-pbx
 
 [Install]
 WantedBy=multi-user.target

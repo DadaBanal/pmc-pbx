@@ -1,12 +1,21 @@
 {
+  "version": 0,
   "site": "PMC",
   "note": "SAMPLE ONLY. Names and MACs here are placeholders, not real people or real phones. The live directory.json lives in /etc/pmc-pbx on the VM and is never committed.",
+  "departments": [
+    { "name": "Nursing", "from": 1000, "to": 1999 },
+    { "name": "Clinical", "from": 2000, "to": 2999 },
+    { "name": "Administration", "from": 3000, "to": 3899 },
+    { "name": "ICT", "from": 3900, "to": 3999 },
+    { "name": "Doctors", "from": 4000, "to": 4999 },
+    { "name": "JRBY", "from": 5000, "to": 5999 }
+  ],
   "extensions": [
-    { "ext": "3901", "name": "ICT Test Phone A", "dept": "ICT", "model": "T31P", "mac": "001565aaaa01", "voicemail": true,
+    { "ext": "3901", "name": "ICT Test Phone A", "dept": "ICT", "site": "PMC", "model": "T31P", "mac": "001565aaaa01", "voicemail": true,
       "keys": [ { "type": "blf", "ext": "3902" } ] },
-    { "ext": "3902", "name": "ICT Test Phone B", "dept": "ICT", "model": "T31P", "mac": "001565aaaa02", "voicemail": true,
+    { "ext": "3902", "name": "ICT Test Phone B", "dept": "ICT", "site": "PMC", "model": "T31P", "mac": "001565aaaa02", "voicemail": true,
       "keys": [ { "type": "blf", "ext": "3901" } ] },
-    { "ext": "1101", "name": "Nurse Station 1", "dept": "Nursing", "model": "T31P", "mac": "", "voicemail": false,
+    { "ext": "1101", "name": "Nurse Station 1", "dept": "Nursing", "site": "PMC", "model": "T31P", "mac": "", "voicemail": false,
       "keys": [ { "type": "blf", "ext": "3901", "label": "ICT" } ] }
   ]
 }

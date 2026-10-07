@@ -8,6 +8,8 @@
   "ringSeconds": 25,
   "ntpServer": "pool.ntp.org",
   "listen": { "host": "0.0.0.0", "port": 443 },
+  "admin": { "host": "127.0.0.1", "port": 8443, "sessionHours": 12 },
+  "asterisk": { "command": ["/usr/sbin/asterisk"], "timeoutMs": 15000 },
   "certFile": "/etc/pmc-pbx/secrets/cert.pem",
   "keyFile": "/etc/pmc-pbx/secrets/key.pem",
   "outDir": "/var/lib/pmc-pbx/out",

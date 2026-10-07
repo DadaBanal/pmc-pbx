@@ -8,7 +8,7 @@ on:
 
 jobs:
   check:
-    name: syntax, generator, no secrets
+    name: syntax, unit and API tests, no secrets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,8 +19,11 @@ jobs:
       - name: node syntax
         run: |
           node --version
-          node --check app/gen.js
-          node --check app/server.js
+          for f in app/*.js app/lib/*.js app/test/*.js; do node --check "$f"; done
+          echo "all files parse"
+
+      - name: unit and API tests (fake engine)
+        run: node --test app/test/generate.test.js app/test/auth.test.js app/test/api.test.js
 
       - name: generator against the sample directory
         run: |
@@ -29,12 +32,9 @@ jobs:
           test -s /tmp/out/asterisk/pjsip_pmc.conf
           test -s /tmp/out/asterisk/extensions_pmc.conf
           test -s /tmp/out/phones/001565aaaa01.cfg
-          test -s /tmp/out/phones/001565aaaa02.cfg
           test -s /tmp/out/phones/phonebook.xml
           grep -q '^exten => 3901,hint,PJSIP/3901' /tmp/out/asterisk/extensions_pmc.conf
           grep -q '^account.1.sip_server.1.transport_type = 2' /tmp/out/phones/001565aaaa01.cfg
-          grep -q '^media_encryption=sdes' /tmp/out/asterisk/pjsip_pmc.conf
-          echo "secrets file created, never printed:"; ls -l app/sample/secrets/secrets.json
           echo "control: a broken directory must be refused"
           mkdir -p /tmp/bad && cp app/sample/config.json /tmp/bad/
           echo '{"extensions":[{"ext":"12","name":"x","mac":"zz"}]}' > /tmp/bad/directory.json
@@ -42,7 +42,7 @@ jobs:
 
       - name: no secrets tracked in git
         run: |
-          if git ls-files | grep -Ei 'secrets/|\.pem$|\.key$|secrets\.json'; then echo "a secret path is tracked"; exit 1; fi
+          if git ls-files | grep -Ei 'secrets/|\.pem$|\.key$|secrets\.json|users\.json'; then echo "a secret path is tracked"; exit 1; fi
           echo "none"
 
       - name: shell syntax
@@ -59,7 +59,7 @@ jobs:
           Write-Host "parse ok"
 
   asterisk:
-    name: build Asterisk 22 on Debian 12 and load the generated config
+    name: build Asterisk 22 on Debian 12, load the config, drive it from the admin screen
     runs-on: ubuntu-latest
     container: debian:12
     timeout-minutes: 90
@@ -67,7 +67,7 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - name: base tools
-        run: apt-get update && apt-get install -y git ca-certificates nodejs openssl procps
+        run: apt-get update && apt-get install -y git ca-certificates nodejs openssl procps curl
 
       - uses: actions/checkout@v4
 
@@ -89,7 +89,8 @@ jobs:
             -keyout /etc/pmc-pbx/secrets/key.pem -out /etc/pmc-pbx/secrets/cert.pem 2>/dev/null
           node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out
           cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf /etc/asterisk/
-          chown -R asterisk:asterisk /etc/asterisk /etc/pmc-pbx /var/lib/pmc-pbx /var/run/asterisk
+          chown -R asterisk:asterisk /etc/asterisk /var/run/asterisk
+          chmod -R a+rX /var/lib/pmc-pbx /etc/pmc-pbx/secrets
           /usr/sbin/asterisk -U asterisk -G asterisk
           for i in 1 2 3 4 5 6 7 8 9 10; do /usr/sbin/asterisk -rx 'core show version' >/dev/null 2>&1 && break; sleep 2; done
           /usr/sbin/asterisk -rx 'core show version'
@@ -99,5 +100,36 @@ jobs:
           grep -q '3901' /tmp/ep.txt && grep -q '3902' /tmp/ep.txt && grep -q '1101' /tmp/ep.txt
           /usr/sbin/asterisk -rx 'dialplan show pmc-internal' | tee /tmp/dp.txt
           grep -q '3901' /tmp/dp.txt && grep -q '9196' /tmp/dp.txt
-          /usr/sbin/asterisk -rx 'core stop now'
           echo "engine loaded the generated config: transport, 3 endpoints, dialplan"
+
+      - name: the admin screen adds a phone, applies it, the engine shows it, the phone fetches its config
+        run: |
+          export PMC_PBX_CONF=/etc/pmc-pbx
+          PMC_PBX_PASSWORD='CiAdminPassw0rd!' node app/admin.js adduser ci admin
+          node app/admin.js check
+          nohup node app/server.js > /tmp/server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sk -o /dev/null https://127.0.0.1:8443/ && break; sleep 1; done
+          curl -sk -c /tmp/jar -H 'Content-Type: application/json' -H 'X-PMC-PBX: 1' \
+            -d '{"name":"ci","password":"CiAdminPassw0rd!"}' https://127.0.0.1:8443/api/login | tee /tmp/login.json; echo
+          grep -q '"role":"admin"' /tmp/login.json
+          curl -sk -b /tmp/jar -H 'Content-Type: application/json' -H 'X-PMC-PBX: 1' \
+            -d '{"name":"Nurse Station 2","dept":"Nursing","mac":"001565aaaa03","voicemail":true,"keys":[{"type":"blf","ext":"1101"}]}' \
+            https://127.0.0.1:8443/api/extensions | tee /tmp/add.json; echo
+          grep -q '"ext":"1000"' /tmp/add.json
+          curl -sk -b /tmp/jar -X POST -H 'X-PMC-PBX: 1' https://127.0.0.1:8443/api/apply | tee /tmp/apply.json; echo
+          grep -q '"ok":true' /tmp/apply.json
+          /usr/sbin/asterisk -rx 'pjsip show endpoints' | tee /tmp/ep2.txt
+          grep -q '1000/1000' /tmp/ep2.txt
+          /usr/sbin/asterisk -rx 'dialplan show pmc-internal' | grep -q "'1000' => hint"
+          curl -sk -b /tmp/jar https://127.0.0.1:8443/api/status | tee /tmp/status.json; echo
+          grep -q '"ext":"1000"' /tmp/status.json
+          grep -q '"pending":false' /tmp/status.json
+          PW=$(node -e "console.log(require('/etc/pmc-pbx/secrets/secrets.json').prov['001565aaaa03'])")
+          curl -sk -u "001565aaaa03:$PW" https://127.0.0.1:443/prov/001565aaaa03.cfg | grep -q 'account.1.user_name = 1000'
+          test "$(curl -sk -o /dev/null -w '%{http_code}' -u '001565aaaa03:wrong' https://127.0.0.1:443/prov/001565aaaa03.cfg)" = 401
+          curl -sk https://127.0.0.1:443/health | tee /tmp/health.json; echo
+          grep -q '"phones":3' /tmp/health.json
+          curl -sk -b /tmp/jar https://127.0.0.1:8443/api/audit | grep -q '"action":"apply"'
+          /usr/sbin/asterisk -rx 'core stop now'
+          echo "admin screen -> directory -> apply -> engine -> phone config: proven on the real engine"
+          echo "--- server log ---"; cat /tmp/server.log

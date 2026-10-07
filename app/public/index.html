@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PMC Phones</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">PMC Phones</div>
+  <div id="chips" class="chips"></div>
+  <div id="who" class="who"></div>
+</header>
+<nav id="nav" class="nav hidden">
+  <button data-view="phones" class="active">Phones</button>
+  <button data-view="departments">Departments</button>
+  <button data-view="live">Live status</button>
+  <button data-view="users" data-role="admin">Users</button>
+  <button data-view="history" data-role="admin">History</button>
+</nav>
+<main id="main"></main>
+<div id="modal" class="modal hidden"><div class="card" id="modalCard"></div></div>
+<div id="toast" class="toast hidden"></div>
+<script src="/app.js"></script>
+</body>
+</html>
