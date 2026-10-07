@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: syntax, generator, no secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: node syntax
+        run: |
+          node --version
+          node --check app/gen.js
+          node --check app/server.js
+
+      - name: generator against the sample directory
+        run: |
+          node app/gen.js --conf app/sample --out /tmp/out --check
+          node app/gen.js --conf app/sample --out /tmp/out
+          test -s /tmp/out/asterisk/pjsip_pmc.conf
+          test -s /tmp/out/asterisk/extensions_pmc.conf
+          test -s /tmp/out/phones/001565aaaa01.cfg
+          test -s /tmp/out/phones/001565aaaa02.cfg
+          test -s /tmp/out/phones/phonebook.xml
+          grep -q '^exten => 3901,hint,PJSIP/3901' /tmp/out/asterisk/extensions_pmc.conf
+          grep -q '^account.1.sip_server.1.transport_type = 2' /tmp/out/phones/001565aaaa01.cfg
+          grep -q '^media_encryption=sdes' /tmp/out/asterisk/pjsip_pmc.conf
+          echo "secrets file created, never printed:"; ls -l app/sample/secrets/secrets.json
+          echo "control: a broken directory must be refused"
+          mkdir -p /tmp/bad && cp app/sample/config.json /tmp/bad/
+          echo '{"extensions":[{"ext":"12","name":"x","mac":"zz"}]}' > /tmp/bad/directory.json
+          if node app/gen.js --conf /tmp/bad --out /tmp/badout --check; then echo "generator accepted a bad directory"; exit 1; fi
+
+      - name: no secrets tracked in git
+        run: |
+          if git ls-files | grep -Ei 'secrets/|\.pem$|\.key$|secrets\.json'; then echo "a secret path is tracked"; exit 1; fi
+          echo "none"
+
+      - name: shell syntax
+        run: |
+          bash -n asterisk/build-asterisk.sh
+          if command -v shellcheck >/dev/null 2>&1; then shellcheck -S warning asterisk/build-asterisk.sh; else echo "shellcheck absent, skipped"; fi
+
+      - name: powershell parse of the VM script
+        shell: pwsh
+        run: |
+          $t = $null; $e = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/vm/New-PbxVm-DNDHOST1.ps1", [ref]$t, [ref]$e) | Out-Null
+          if ($e.Count -gt 0) { $e | ForEach-Object { Write-Host ("line " + $_.Extent.StartLineNumber + ": " + $_.Message) }; exit 1 }
+          Write-Host "parse ok"
+
+  asterisk:
+    name: build Asterisk 22 on Debian 12 and load the generated config
+    runs-on: ubuntu-latest
+    container: debian:12
+    timeout-minutes: 90
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: base tools
+        run: apt-get update && apt-get install -y git ca-certificates nodejs openssl procps
+
+      - uses: actions/checkout@v4
+
+      - name: build and install Asterisk (signature check skipped in CI; the VM build verifies it)
+        run: SKIP_SIG=1 bash asterisk/build-asterisk.sh 22.11.0
+
+      - name: version gate
+        run: |
+          /usr/sbin/asterisk -V | tee /tmp/version.txt
+          grep -q 'Asterisk 22.11.0' /tmp/version.txt
+
+      - name: generated config loads in the real engine
+        run: |
+          node --version
+          mkdir -p /etc/pmc-pbx/secrets /var/lib/pmc-pbx/out
+          cp app/sample/config.json /etc/pmc-pbx/config.json
+          cp app/sample/directory.json /etc/pmc-pbx/directory.json
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=pbx.test' \
+            -keyout /etc/pmc-pbx/secrets/key.pem -out /etc/pmc-pbx/secrets/cert.pem 2>/dev/null
+          node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out
+          cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf /etc/asterisk/
+          chown -R asterisk:asterisk /etc/asterisk /etc/pmc-pbx /var/lib/pmc-pbx /var/run/asterisk
+          /usr/sbin/asterisk -U asterisk -G asterisk
+          for i in 1 2 3 4 5 6 7 8 9 10; do /usr/sbin/asterisk -rx 'core show version' >/dev/null 2>&1 && break; sleep 2; done
+          /usr/sbin/asterisk -rx 'core show version'
+          /usr/sbin/asterisk -rx 'pjsip show transports' | tee /tmp/tr.txt
+          grep -q 'transport-tls' /tmp/tr.txt
+          /usr/sbin/asterisk -rx 'pjsip show endpoints' | tee /tmp/ep.txt
+          grep -q '3901' /tmp/ep.txt && grep -q '3902' /tmp/ep.txt && grep -q '1101' /tmp/ep.txt
+          /usr/sbin/asterisk -rx 'dialplan show pmc-internal' | tee /tmp/dp.txt
+          grep -q '3901' /tmp/dp.txt && grep -q '9196' /tmp/dp.txt
+          /usr/sbin/asterisk -rx 'core stop now'
+          echo "engine loaded the generated config: transport, 3 endpoints, dialplan"
