@@ -1,0 +1,26 @@
+[Unit]
+Description=PMC PBX provisioning and health server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pmcpbx
+Group=pmcpbx
+Environment=PMC_PBX_CONF=/etc/pmc-pbx
+Environment=PMC_PBX_OUT=/var/lib/pmc-pbx/out
+WorkingDirectory=/opt/pmc-pbx/app
+ExecStart=/usr/local/bin/node /opt/pmc-pbx/app/server.js
+Restart=always
+RestartSec=5
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/pmc-pbx
+ReadWritePaths=/var/lib/pmc-pbx
+
+[Install]
+WantedBy=multi-user.target

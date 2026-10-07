@@ -1,0 +1,17 @@
+{
+  "fqdn": "pbx.pmcne.ph",
+  "sipPort": 5061,
+  "provUrl": "https://pbx.pmcne.ph/prov/",
+  "externalIp": "103.144.157.234",
+  "localNets": ["10.2.0.0/22", "10.10.0.0/24", "10.10.10.0/24", "127.0.0.1/32"],
+  "codecs": ["g722", "alaw", "ulaw"],
+  "ringSeconds": 25,
+  "ntpServer": "pool.ntp.org",
+  "listen": { "host": "0.0.0.0", "port": 443 },
+  "certFile": "/etc/pmc-pbx/secrets/cert.pem",
+  "keyFile": "/etc/pmc-pbx/secrets/key.pem",
+  "outDir": "/var/lib/pmc-pbx/out",
+  "banAfter": 10,
+  "banWindowSec": 600,
+  "banSec": 3600
+}

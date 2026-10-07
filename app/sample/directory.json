@@ -1,0 +1,12 @@
+{
+  "site": "PMC",
+  "note": "SAMPLE ONLY. Names and MACs here are placeholders, not real people or real phones. The live directory.json lives in /etc/pmc-pbx on the VM and is never committed.",
+  "extensions": [
+    { "ext": "3901", "name": "ICT Test Phone A", "dept": "ICT", "model": "T31P", "mac": "001565aaaa01", "voicemail": true,
+      "keys": [ { "type": "blf", "ext": "3902" } ] },
+    { "ext": "3902", "name": "ICT Test Phone B", "dept": "ICT", "model": "T31P", "mac": "001565aaaa02", "voicemail": true,
+      "keys": [ { "type": "blf", "ext": "3901" } ] },
+    { "ext": "1101", "name": "Nurse Station 1", "dept": "Nursing", "model": "T31P", "mac": "", "voicemail": false,
+      "keys": [ { "type": "blf", "ext": "3901", "label": "ICT" } ] }
+  ]
+}

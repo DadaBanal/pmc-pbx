@@ -1,0 +1,20 @@
+# secrets never enter git
+**/secrets/
+*.pem
+*.key
+*.pfx
+*.p12
+secrets.json
+config.json
+!app/sample/config.json
+
+# generated output
+out/
+/tmp/
+
+# editors and OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+*.log

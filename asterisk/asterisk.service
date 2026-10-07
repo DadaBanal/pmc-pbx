@@ -1,0 +1,21 @@
+[Unit]
+Description=Asterisk PBX (PMC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=asterisk
+Group=asterisk
+ExecStart=/usr/sbin/asterisk -f -C /etc/asterisk/asterisk.conf
+ExecReload=/usr/sbin/asterisk -rx "core reload"
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
