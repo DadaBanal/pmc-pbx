@@ -57,12 +57,16 @@ The API test makes a throwaway self-signed certificate with `openssl` and is ski
 
 ```
 sudo useradd --system --home-dir /var/lib/pmc-pbx --shell /usr/sbin/nologin pmcpbx
-sudo mkdir -p /etc/pmc-pbx/secrets /var/lib/pmc-pbx/out
+sudo mkdir -p /etc/pmc-pbx/secrets /etc/pmc-pbx/tls /var/lib/pmc-pbx/out/asterisk /var/lib/pmc-pbx/out/phones
 sudo cp app/sample/config.json /etc/pmc-pbx/config.json       # edit: admin.host = the VM's LAN address, asterisk.command = ["sudo","-n","/usr/sbin/asterisk"]
 sudo cp app/sample/directory.json /etc/pmc-pbx/directory.json # replace with the real list, or start empty and use the screen
-# certificate and key as /etc/pmc-pbx/secrets/cert.pem and key.pem, owner pmcpbx, mode 0600
+# the wildcard certificate and key as /etc/pmc-pbx/tls/cert.pem and key.pem (both the app and the engine read them)
 sudo chown -R pmcpbx:pmcpbx /etc/pmc-pbx /var/lib/pmc-pbx
 sudo chmod 0700 /etc/pmc-pbx/secrets
+sudo chgrp asterisk /etc/pmc-pbx/tls /etc/pmc-pbx/tls/*.pem /var/lib/pmc-pbx/out/asterisk
+sudo chmod 0750 /etc/pmc-pbx/tls && sudo chmod 0640 /etc/pmc-pbx/tls/*.pem
+sudo chmod 2750 /var/lib/pmc-pbx/out/asterisk         # setgid: generated includes inherit group asterisk
+sudo usermod -aG asterisk pmcpbx
 echo 'pmcpbx ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx *' | sudo tee /etc/sudoers.d/pmc-pbx
 sudo -u pmcpbx PMC_PBX_CONF=/etc/pmc-pbx node app/admin.js adduser dada admin
 sudo install -m 0644 app/pmc-pbx.service /etc/systemd/system/
@@ -70,10 +74,17 @@ sudo systemctl daemon-reload && sudo systemctl enable --now pmc-pbx
 curl -sk https://pbx.pmcne.ph/health
 ```
 
-Asterisk reads the generated includes because `asterisk/conf/pjsip.conf` and `extensions.conf` carry
-`#include /var/lib/pmc-pbx/out/asterisk/pjsip_pmc.conf` and `..._pmc.conf`; the `asterisk` user needs read
-access to `/var/lib/pmc-pbx/out/asterisk/` (phase 3 settles the group arrangement). The sudoers line is what lets
-the screen reload the engine without running as root.
+Who reads what: `secrets/` (phone passwords, user hashes, the session key) is the app's alone, 0700. `tls/` is
+read by the app for HTTPS and by the engine for SIP over TLS. `out/asterisk/` holds the generated includes
+with SIP secrets, group `asterisk`, mode 0640, and the directory is setgid so every regenerated file keeps that
+group; the generator also sets the group explicitly. The engine reads them because `asterisk/conf/pjsip.conf`
+and `extensions.conf` carry `#include /var/lib/pmc-pbx/out/asterisk/...`.
+
+**Apply verifies, it does not trust.** A reload the engine cannot read says nothing and keeps the old config
+(found by CI on 7 Oct 2026). After every reload the app reads `pjsip show endpoints` and
+`dialplan show pmc-internal` back and fails the Apply, with the missing numbers named, if the engine does not
+hold every extension and hint in the directory. The sudoers line is what lets the screen reload the engine
+without running as root.
 
 ## Not built yet
 

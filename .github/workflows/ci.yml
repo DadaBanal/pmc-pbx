@@ -82,15 +82,19 @@ jobs:
       - name: generated config loads in the real engine
         run: |
           node --version
-          mkdir -p /etc/pmc-pbx/secrets /var/lib/pmc-pbx/out
+          # the VM layout: secrets 0700 for the app only; tls readable by the engine's group; out/asterisk group asterisk, setgid
+          mkdir -p /etc/pmc-pbx/secrets /etc/pmc-pbx/tls /var/lib/pmc-pbx/out/asterisk /var/lib/pmc-pbx/out/phones
           cp app/sample/config.json /etc/pmc-pbx/config.json
           cp app/sample/directory.json /etc/pmc-pbx/directory.json
           openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=pbx.test' \
-            -keyout /etc/pmc-pbx/secrets/key.pem -out /etc/pmc-pbx/secrets/cert.pem 2>/dev/null
+            -keyout /etc/pmc-pbx/tls/key.pem -out /etc/pmc-pbx/tls/cert.pem 2>/dev/null
+          chgrp -R asterisk /etc/pmc-pbx/tls /var/lib/pmc-pbx/out/asterisk
+          chmod 0750 /etc/pmc-pbx/tls && chmod 0640 /etc/pmc-pbx/tls/*.pem
+          chmod 2750 /var/lib/pmc-pbx/out/asterisk
           node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out
+          ls -ln /var/lib/pmc-pbx/out/asterisk
           cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf /etc/asterisk/
           chown -R asterisk:asterisk /etc/asterisk /var/run/asterisk
-          chmod -R a+rX /var/lib/pmc-pbx /etc/pmc-pbx/secrets
           /usr/sbin/asterisk -U asterisk -G asterisk
           for i in 1 2 3 4 5 6 7 8 9 10; do /usr/sbin/asterisk -rx 'core show version' >/dev/null 2>&1 && break; sleep 2; done
           /usr/sbin/asterisk -rx 'core show version'
@@ -118,6 +122,9 @@ jobs:
           grep -q '"ext":"1000"' /tmp/add.json
           curl -sk -b /tmp/jar -X POST -H 'X-PMC-PBX: 1' https://127.0.0.1:8443/api/apply | tee /tmp/apply.json; echo
           grep -q '"ok":true' /tmp/apply.json
+          grep -q '"missingEndpoints":\[\]' /tmp/apply.json
+          grep -q '"missingHints":\[\]' /tmp/apply.json
+          ls -ln /var/lib/pmc-pbx/out/asterisk
           /usr/sbin/asterisk -rx 'pjsip show endpoints' | tee /tmp/ep2.txt
           grep -q '1000/1000' /tmp/ep2.txt
           /usr/sbin/asterisk -rx 'dialplan show pmc-internal' | grep -q "'1000' => hint"
@@ -132,4 +139,7 @@ jobs:
           curl -sk -b /tmp/jar https://127.0.0.1:8443/api/audit | grep -q '"action":"apply"'
           /usr/sbin/asterisk -rx 'core stop now'
           echo "admin screen -> directory -> apply -> engine -> phone config: proven on the real engine"
-          echo "--- server log ---"; cat /tmp/server.log
+
+      - name: server log
+        if: always()
+        run: cat /tmp/server.log 2>/dev/null || echo "no server log"

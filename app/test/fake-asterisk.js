@@ -10,6 +10,7 @@ const cmd = i >= 0 ? process.argv[i + 1] : '';
 if (process.env.FAKE_DOWN) { process.stderr.write('Unable to connect to remote asterisk (does /var/run/asterisk/asterisk.ctl exist?)\n'); process.exit(1); }
 
 function exts() {
+  if (process.env.FAKE_STALE) return ['1101', '3901', '3902']; // an engine that kept its old config after a reload
   try { return Array.from(fs.readFileSync(process.env.FAKE_PJSIP_FILE || '', 'utf8').matchAll(/^\[(\d{4})\]\(pmc-endpoint\)/gm)).map(m => m[1]); }
   catch (e) { return []; }
 }
@@ -44,6 +45,12 @@ switch (cmd) {
   case 'dialplan reload':
     console.log('Dialplan reloaded.');
     break;
+  case 'dialplan show pmc-internal': {
+    console.log("[ Context 'pmc-internal' created by 'pbx_config' ]");
+    for (const x of exts()) console.log("  '" + x + "' =>         hint: PJSIP/" + x + "                              [extensions_pmc.conf:20]");
+    console.log("  '9196' =>         1. Answer()                                   [extensions_pmc.conf:10]");
+    break;
+  }
   default:
     console.log("No such command '" + cmd + "'");
     process.exit(1);

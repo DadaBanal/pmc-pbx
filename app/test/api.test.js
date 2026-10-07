@@ -69,6 +69,7 @@ test('admin screen API, provisioning and the engine, end to end with a fake engi
   r = await request(A, 'POST', '/api/apply', { cookie });
   assert.equal(r.status, 200, r.text); assert.equal(r.json.ok, true); assert.equal(r.json.manifest.phones, 3); assert.equal(r.json.manifest.directoryVersion, 1);
   assert.ok(r.json.reload.steps.every(s => s.ok));
+  assert.deepEqual(r.json.verified, { endpoints: 4, hints: 4, missingEndpoints: [], missingHints: [] }, 'apply checks what the engine really loaded');
 
   r = await request(A, 'GET', '/api/status', { cookie });
   assert.equal(r.json.pending, false); assert.equal(r.json.appliedVersion, 1);
@@ -155,6 +156,15 @@ test('admin screen API, provisioning and the engine, end to end with a fake engi
   r = await request(A, 'GET', '/api/status', { cookie: ed.cookie });
   assert.equal(r.json.engine.state, 'unreachable');
   delete process.env.FAKE_DOWN;
+
+  process.env.FAKE_STALE = '1';
+  r = await request(A, 'POST', '/api/apply', { cookie: ed.cookie });
+  assert.equal(r.status, 502, 'a reload the engine silently ignored is reported as a failure');
+  assert.match(r.json.error, /did not load 1 extension\(s\) \[1000\]/);
+  assert.deepEqual(r.json.verified.missingEndpoints, ['1000']);
+  delete process.env.FAKE_STALE;
+  r = await request(A, 'GET', '/api/audit', { cookie });
+  assert.ok(r.json.some(a => a.action === 'apply' && /FAILED: engine reloaded but did not load/.test(a.detail)), 'the failed apply is in the history');
 });
 
 test('repeated failed sign-ins lock the address out', { skip }, async t => {

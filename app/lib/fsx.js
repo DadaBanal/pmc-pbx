@@ -10,6 +10,11 @@ function writeFileAtomic(file, content, mode) {
   ensureDir(path.dirname(file));
   const tmp = file + '.tmp-' + process.pid + '-' + crypto.randomBytes(3).toString('hex');
   fs.writeFileSync(tmp, content, { mode: mode || 0o644 });
+  // Inherit the directory's group so a 0640 file stays readable by the engine (group asterisk on the VM).
+  // A directory with the setgid bit does this by itself; this covers the case where it is not set.
+  if (process.platform !== 'win32') {
+    try { fs.chownSync(tmp, -1, fs.statSync(path.dirname(file)).gid); } catch (err) { /* not permitted: leave as written */ }
+  }
   fs.renameSync(tmp, file);
 }
 

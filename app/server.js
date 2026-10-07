@@ -40,9 +40,26 @@ async function applyChanges(cfg, store, who) {
   if (created) store.saveSecrets(secrets);
   const manifest = G.generate(cfg, dir, secrets, cfg.outDir);
   const reload = await A.reload(cfg);
+  let error = reload.ok ? null : (reload.error || 'engine reload failed');
+  let verified = null;
+  if (reload.ok) {
+    // A reload that cannot read the new file says nothing and keeps the old config. Check what the engine holds.
+    const st = await A.status(cfg);
+    const dp = await A.run(cfg, 'dialplan show pmc-internal');
+    const loaded = new Set(st.endpoints.map(p => p.ext));
+    const missingEndpoints = dir.extensions.filter(e => !loaded.has(e.ext)).map(e => e.ext);
+    const missingHints = dir.extensions.filter(e => !dp.stdout.includes("'" + e.ext + "' =>")).map(e => e.ext);
+    verified = { endpoints: dir.extensions.length - missingEndpoints.length, hints: dir.extensions.length - missingHints.length, missingEndpoints, missingHints };
+    if (st.engine !== 'ok') error = 'engine unreachable after reload: ' + (st.error || '');
+    else if (missingEndpoints.length || missingHints.length) {
+      error = 'engine reloaded but did not load ' + (missingEndpoints.length ? missingEndpoints.length + ' extension(s) [' + missingEndpoints.slice(0, 5).join(', ') + (missingEndpoints.length > 5 ? ', ...' : '') + ']' : '') +
+        (missingEndpoints.length && missingHints.length ? ' and ' : '') + (missingHints.length ? missingHints.length + ' hint(s)' : '') +
+        '. Check that the engine can read ' + cfg.outDir + '/asterisk (group and mode) and its log for config errors.';
+    }
+  }
   store.audit({ who, action: 'apply', version: dir.version,
-    detail: 'version ' + dir.version + ', ' + manifest.phones + ' phones, ' + (reload.ok ? 'engine reloaded' : 'engine NOT reloaded: ' + (reload.error || 'see steps')) });
-  return { ok: reload.ok, manifest, reload, secretsCreated: created, error: reload.ok ? null : (reload.error || 'engine reload failed') };
+    detail: 'version ' + dir.version + ', ' + manifest.phones + ' phones, ' + (error ? 'FAILED: ' + error : 'engine reloaded and verified (' + verified.endpoints + ' extensions, ' + verified.hints + ' hints)') });
+  return { ok: !error, manifest, reload, verified, secretsCreated: created, error };
 }
 
 function start(cfg, opts) {
