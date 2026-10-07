@@ -31,7 +31,23 @@ mkdir -p "$WORK"; cd "$WORK"
 # ---- download and verify ----------------------------------------------------------------------
 [[ -f "$TARBALL" ]] || wget -q -O "$TARBALL" "${BASE_URL}/${TARBALL}"
 wget -q -O "${TARBALL}.asc" "${BASE_URL}/${TARBALL}.asc" || true
-echo "SHA256 of ${TARBALL}: $(sha256sum "$TARBALL" | cut -d' ' -f1)"
+ACTUAL_SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+echo "SHA256 of ${TARBALL}: ${ACTUAL_SHA256}"
+
+# Hash pinned from the CI download of 7 Oct 2026 (run 37579821043). It makes later builds reproducible
+# against that artifact; it is NOT an authenticity proof - the .asc signature below is.
+case "$VERSION" in
+    22.11.0) PINNED_SHA256="3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94" ;;
+    *)       PINNED_SHA256="" ;;
+esac
+if [[ -n "$PINNED_SHA256" ]]; then
+    if [[ "$ACTUAL_SHA256" != "$PINNED_SHA256" ]]; then
+        echo "STOP: ${TARBALL} does not match the pinned SHA256 for ${VERSION}. Not building it."; exit 3
+    fi
+    echo "Matches the pinned SHA256 for ${VERSION}."
+else
+    echo "No pinned SHA256 for ${VERSION}; signature check is the only verification."
+fi
 
 if [[ "${SKIP_SIG:-0}" != "1" ]]; then
     if [[ ! -s "${TARBALL}.asc" ]]; then
