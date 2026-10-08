@@ -50,3 +50,7 @@ hash placeholder must be generated on the VM with `openssl passwd -6` and never 
 - Secure Boot stays ON with the **Microsoft UEFI Certificate Authority** template; the script sets it.
 - The `hyperv-daemons` package gives the host the VM's IP and clean shutdown; Debian installs it when it
   detects Hyper-V. Confirm with `systemctl status hyperv-daemons.hv-kvp-daemon`.
+
+## 0. Pilot on a NUC first
+
+Dada, 8 Oct 2026: the engine runs first on a hospital mini-PC. See `NUC.md` in this folder; the VM below comes after, with the same scripts.

@@ -45,3 +45,7 @@ creating `app/sample/secrets/secrets.json` with random secrets on first run. `ap
 - Label every number MEASURED or INFERRED in docs and commit messages, same as the record.
 
 Built from 7 Oct 2026 for workstream WS47. Licence of the engine: Asterisk is GPL-2.0. This application: PMC internal.
+
+## Outside lines
+
+None, by decision of 7 Oct 2026. `asterisk/conf/trunk.example.conf` holds the shape of a carrier trunk, fully commented and included by nothing, for the day that changes; the record explains what a trunk entails in `docs/pbx-sip-trunk-what-it-entails-20261008.md`.
