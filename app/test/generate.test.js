@@ -66,7 +66,8 @@ test('secrets are created once and the rendered files carry them', () => {
   assert.match(dp, /^exten => 3901,hint,PJSIP\/3901$/m);
   assert.match(dp, /^exten => _\[1-8\]XXX,1,NoOp/m);
   assert.match(dp, /^exten => 911,1,Answer\(\)$/m);
-  const y = G.renderYealink(d.extensions[0], d, cfg, secrets);
+  const yl = require('../lib/phones/yealink');
+  const y = yl.perPhoneFile(d.extensions[0], { cfg, dir: d, secrets }).body;
   assert.match(y, /^#!version:1\.0\.0\.1/);
   assert.match(y, /^account\.1\.user_name = 3901$/m);
   assert.match(y, /^account\.1\.sip_server\.1\.transport_type = 2$/m);
@@ -75,7 +76,7 @@ test('secrets are created once and the rendered files carry them', () => {
   assert.match(y, /^linekey\.1\.value = 3902$/m);
   assert.match(y, /^linekey\.1\.label = ICT Test Phone B$/m);
   assert.ok(y.includes('static.auto_provision.server.password = ' + secrets.prov['001565aaaa01']));
-  const pb = G.renderPhonebook(d);
+  const pb = yl.sharedFiles(d.extensions.filter(e => e.mac), { cfg, dir: d, secrets })[0].body;
   assert.match(pb, /<Telephone>1101<\/Telephone>/);
   assert.match(pb, /Nurse Station 1 - Nursing/);
 });

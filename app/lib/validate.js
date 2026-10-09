@@ -1,9 +1,12 @@
 'use strict';
 // Directory rules. Every write to directory.json passes through validateDirectory first.
 
+const phones = require('./phones');
+
 const EXT_RE = /^[1-9][0-9]{3}$/;
 const MAC_RE = /^[0-9a-f]{12}$/;
-const MODELS = ['T31P', 'T33G', 'softphone', 'none'];
+// The models come from the phone registry, so adding a vendor driver is the only change needed.
+const MODELS = phones.modelIds();
 const SITES = ['PMC', 'JRBY'];
 
 function normalizeExtension(e) {
@@ -65,6 +68,10 @@ function validateDirectory(dir, cfg) {
     if (e.name && e.name.length > 40) out.push(id + ': name longer than 40 characters');
     if (!SITES.includes(e.site)) out.push(id + ': site must be one of ' + SITES.join(', '));
     if (!MODELS.includes(e.model)) out.push(id + ': model must be one of ' + MODELS.join(', '));
+    if (MODELS.includes(e.model) && e.keys.length && !phones.supportsKeys(e.model)) {
+      const spec = phones.modelSpec(e.model);
+      out.push(id + ': ' + spec.label + ' has no programmable keys, so its ' + e.keys.length + ' button(s) cannot be set');
+    }
     if (e.mac) {
       if (!MAC_RE.test(e.mac)) out.push(id + ': MAC must be 12 hex characters');
       if (seenMac.has(e.mac)) out.push(id + ': duplicate MAC ' + e.mac);
@@ -76,7 +83,10 @@ function validateDirectory(dir, cfg) {
       const n = Number(e.ext);
       if (Number.isInteger(d.from) && (n < d.from || n > d.to)) out.push(id + ': outside the ' + d.name + ' range ' + d.from + '-' + d.to);
     }
-    if (e.keys.length > 20) out.push(id + ': more than 20 buttons');
+    const spec = MODELS.includes(e.model) ? phones.modelSpec(e.model) : null;
+    if (spec && spec.lineKeys > 0 && e.keys.length > spec.lineKeys) {
+      out.push(id + ': ' + spec.label + ' has ' + spec.lineKeys + ' key(s); ' + e.keys.length + ' are set');
+    }
     e.keys.forEach((k, i) => {
       if (k.type !== 'blf' && k.type !== 'speed') out.push(id + ': button ' + (i + 1) + ' type must be blf or speed');
       if (!EXT_RE.test(k.ext)) out.push(id + ': button ' + (i + 1) + ' needs a 4-digit extension');

@@ -5,8 +5,8 @@
  *
  *   PUBLIC  (cfg.listen, forwarded from the internet)
  *     GET /health                 JSON, no auth
- *     GET /prov/<mac>.cfg         basic auth: user = MAC, password = that MAC's provisioning secret
- *     GET /prov/phonebook.xml     basic auth with any known MAC
+ *     GET /prov/<file>            any file a phone driver generated. index.json beside them says how each is
+ *                                 guarded: 'per-mac' wants that handset's own password, 'shared' any known MAC
  *
  *   ADMIN   (cfg.admin, LAN only, never forwarded)
  *     the PMC Phones screen (app/public) and its JSON API under /api/
@@ -26,6 +26,8 @@ const G = require('./lib/generate');
 const A = require('./lib/asterisk');
 const auth = require('./lib/auth');
 const H = require('./lib/httpx');
+const phones = require('./lib/phones');
+const { readJsonOr } = require('./lib/fsx');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const COOKIE = 'pmcpbx';
@@ -118,19 +120,29 @@ function start(cfg, opts) {
     if (url === '/health') return finish(200, 'application/json', JSON.stringify(health()) + '\n', url);
     if (provBans.isBanned(ip)) return finish(429, 'text/plain', 'too many failures', url);
     const deny = () => { provBans.fail(ip); res.setHeader('WWW-Authenticate', 'Basic realm="pmc-pbx"'); finish(401, 'text/plain', 'unauthorized', url); };
-    let m = /^\/prov\/([0-9a-f]{12})\.cfg$/.exec(url);
+    // Every generated phone file is listed in index.json with the guard its driver asked for. A name that is
+    // not in that index is never served, so no path can reach outside the phones folder.
+    const m = /^\/prov\/([A-Za-z0-9._-]{1,64})$/.exec(url);
     if (m) {
-      if (!provAuthOk(req, m[1])) return deny();
-      const file = path.join(cfg.outDir, 'phones', m[1] + '.cfg');
-      if (!fs.existsSync(file)) return finish(404, 'text/plain', 'not found', url);
-      return finish(200, 'text/plain', fs.readFileSync(file), url + ' mac=' + m[1]);
-    }
-    if (url === '/prov/phonebook.xml') {
+      const name = m[1];
+      const index = readJsonOr(path.join(cfg.outDir, 'phones', 'index.json'), {});
+      const entry = index[name];
+      if (!entry) return finish(404, 'text/plain', 'not found', url);
       const creds = H.basicCreds(req);
-      if (!creds || !/^[0-9a-f]{12}$/.test(creds.user) || !provAuthOk(req, creds.user)) return deny();
-      const file = path.join(cfg.outDir, 'phones', 'phonebook.xml');
+      if (entry.auth === 'per-mac') {
+        // the file belongs to one handset: only that handset's own credentials open it
+        if (entry.mac) { if (!provAuthOk(req, entry.mac)) return deny(); }
+        else if (!creds || !/^[0-9a-f]{12}$/.test(creds.user) || !provAuthOk(req, creds.user)) return deny();
+      } else if (entry.auth === 'shared') {
+        // one file for every phone of that vendor; it carries no per-phone secret, but still never anonymous
+        if (!creds || !/^[0-9a-f]{12}$/.test(creds.user) || !provAuthOk(req, creds.user)) return deny();
+      } else {
+        return finish(404, 'text/plain', 'not found', url);
+      }
+      const file = path.join(cfg.outDir, 'phones', name);
       if (!fs.existsSync(file)) return finish(404, 'text/plain', 'not found', url);
-      return finish(200, 'text/xml', fs.readFileSync(file), url + ' mac=' + creds.user);
+      return finish(200, entry.type || 'text/plain', fs.readFileSync(file),
+        url + ' ' + entry.driver + (entry.mac ? ' mac=' + entry.mac : ' shared'));
     }
     return finish(404, 'text/plain', 'not found', url);
   }
@@ -181,7 +193,24 @@ function start(cfg, opts) {
       const e = findExt(dir, ctx.params[0]);
       const s = store.loadSecrets();
       store.audit({ who: ctx.user.name, action: 'view phone secrets', detail: e.ext + (e.mac ? ' mac ' + e.mac : '') });
-      return { ext: e.ext, mac: e.mac || null, url: cfg.provUrl, username: e.mac || null, password: e.mac ? (s.prov[e.mac] || null) : null, sipPassword: s.sip[e.ext] || null, applied: !!(e.mac && fs.existsSync(path.join(cfg.outDir, 'phones', e.mac + '.cfg'))) };
+      const d = phones.driverFor(e.model);
+      const spec = phones.modelSpec(e.model);
+      const info = { ext: e.ext, mac: e.mac || null, model: e.model, vendor: spec ? spec.vendor : null,
+        url: cfg.provUrl, fqdn: cfg.fqdn, sipPort: cfg.sipPort,
+        provPassword: e.mac ? (s.prov[e.mac] || null) : null, sipPassword: s.sip[e.ext] || null };
+      info.notes = d && d.setupNotes ? d.setupNotes(info) : [];
+      // which generated file, if any, this handset fetches
+      const idx = readJsonOr(path.join(cfg.outDir, 'phones', 'index.json'), {});
+      info.files = Object.keys(idx).filter(n => idx[n].mac === e.mac || (idx[n].auth === 'shared' && idx[n].driver === (d && d.id)));
+      info.applied = info.files.length > 0;
+      // kept for the older screen fields
+      info.username = e.mac || null; info.password = info.provPassword;
+      return info;
+    }],
+    ['GET', /^\/api\/models$/, 'viewer', () => {
+      const out = {};
+      for (const id of phones.modelIds()) { const sp = phones.modelSpec(id); out[id] = { label: sp.label, vendor: sp.vendor, lineKeys: sp.lineKeys, blf: sp.blf }; }
+      return out;
     }],
     ['GET', /^\/api\/departments$/, 'viewer', () => V.normalizeDirectory(store.loadDirectory()).departments],
     ['PUT', /^\/api\/departments$/, 'admin', async ctx => {

@@ -8,7 +8,12 @@
   const $$ = (s, c) => Array.prototype.slice.call((c || d).querySelectorAll(s));
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const icon = (n, cls) => '<svg class="ic' + (cls ? ' ' + cls : '') + '" aria-hidden="true"><use href="#i-' + n + '"></use></svg>';
-  const MODELS = { T31P: 'Yealink T31P desk phone', T33G: 'Yealink T33G desk phone', softphone: 'Software phone', none: 'No phone yet' };
+  // The model catalogue comes from the server, so a new vendor driver appears here with no change to this file.
+  let MODELSPEC = {};
+  const MODELS = new Proxy({}, { get: (_t, k) => (MODELSPEC[k] ? MODELSPEC[k].label : k) });
+  const modelIds = () => Object.keys(MODELSPEC);
+  const modelHasKeys = m => !!(MODELSPEC[m] && MODELSPEC[m].blf && MODELSPEC[m].lineKeys > 0);
+  const modelKeyCount = m => (MODELSPEC[m] ? MODELSPEC[m].lineKeys : 0);
   const ROLES = { viewer: 1, editor: 2, admin: 3 };
   // Engine states: "Not in use", "In use", "Busy", "Ringing", "On hold", "Unavailable". Only the first word decides.
   const onCall = state => /^(in use|busy|ringing|on hold)/i.test(String(state || '').trim());
@@ -86,6 +91,7 @@
 
   // ---------------------------------------------------------------- data
   async function loadAll() {
+    MODELSPEC = await api('GET', '/api/models').catch(() => MODELSPEC);
     S.dir = await api('GET', '/api/directory');
     S.status = await api('GET', '/api/status').catch(() => null);
   }
@@ -243,11 +249,16 @@
       '<div class="field"><label>Extension number</label><input name="ext" class="mono" value="' + esc(e.ext) + '" pattern="[1-9][0-9]{3}" maxlength="4" inputmode="numeric"' + (isNew ? '' : ' readonly title="A number cannot be renamed; remove it and add a new one"') + '></div>' +
       '<div class="field"><label>Name shown on the phone and in the directory</label><input name="name" value="' + esc(e.name) + '" maxlength="40" required placeholder="Nurse Station 2, Dr Santos, Pharmacy counter"></div>' +
       '<div class="field"><label>Site</label><select name="site"><option' + (e.site === 'PMC' ? ' selected' : '') + '>PMC</option><option' + (e.site === 'JRBY' ? ' selected' : '') + '>JRBY</option></select></div>' +
-      '<div class="field"><label>Phone</label><select name="model">' + Object.keys(MODELS).map(m => '<option value="' + m + '"' + (m === e.model ? ' selected' : '') + '>' + MODELS[m] + '</option>').join('') + '</select></div>' +
+      '<div class="field"><label>Phone</label><select name="model">' + (function () {
+        const byVendor = {};
+        for (const mm of modelIds()) { const v = MODELSPEC[mm].vendor; (byVendor[v] = byVendor[v] || []).push(mm); }
+        return Object.keys(byVendor).map(v => '<optgroup label="' + esc(v) + '">' + byVendor[v].map(mm =>
+          '<option value="' + mm + '"' + (mm === e.model ? ' selected' : '') + '>' + esc(MODELSPEC[mm].label) + '</option>').join('') + '</optgroup>').join('');
+      })() + '</select></div>' +
       '<div class="field"><label>Desk phone MAC (the sticker under the phone)</label><input name="mac" class="mono" value="' + esc(e.mac) + '" placeholder="00:15:65:xx:xx:xx" autocomplete="off"></div>' +
       '<div class="field check"><input type="checkbox" name="voicemail" id="vm"' + (e.voicemail ? ' checked' : '') + '><label for="vm">Voicemail on this number</label></div>' +
       '<div class="field"><label>Notes (for ICT)</label><input name="notes" value="' + esc(e.notes) + '" maxlength="200"></div></div></div>' +
-      '<div class="card"><h3>' + icon('sparkle') + 'Buttons on the phone</h3><p class="why" style="margin:0 0 10px">Watch a colleague\'s light and dial them with one press, or dial only.</p><div class="keys" id="keys-list">' + e.keys.map(keyRow).join('') + '</div><div class="actions" style="justify-content:flex-start"><button class="ghost small" type="button" id="addkey">' + icon('plus') + 'Add a button</button></div></div>' +
+      '<div class="card" id="keycard"><h3>' + icon('sparkle') + 'Buttons on the phone</h3><p class="why" id="keywhy" style="margin:0 0 10px">Watch a colleague\'s light and dial them with one press, or dial only.</p><div class="keys" id="keys-list">' + e.keys.map(keyRow).join('') + '</div><div class="actions" style="justify-content:flex-start"><button class="ghost small" type="button" id="addkey">' + icon('plus') + 'Add a button</button></div></div>' +
       '<div class="actions"><span class="spacer"></span>' + (!isNew ? '<button class="danger" type="button" id="remove">' + icon('trash') + 'Remove this number</button>' : '') + (!isNew && can('admin') ? '<button class="ghost" type="button" id="secrets">' + icon('lock') + 'First-time setup details</button>' : '') + '<a class="btn ghost" href="#/phones">Cancel</a><button class="primary" type="submit" id="save">' + icon('check') + (isNew ? 'Add the phone' : 'Save') + '</button></div>' +
       '<div id="secretbox"></div></form>';
     const f = $('#pf');
@@ -255,10 +266,21 @@
     const snapshot = () => JSON.stringify({ ext: f.ext.value.trim(), name: f.name.value, dept: f.dept.value, site: f.site.value, model: f.model.value, mac: f.mac.value, voicemail: f.voicemail.checked, keys: keys(), notes: f.notes.value });
     let base = snapshot();
     const dirty = () => { const now = JSON.parse(snapshot()), was = JSON.parse(base); let n = 0; for (const k in now) if (JSON.stringify(now[k]) !== JSON.stringify(was[k])) n++; if (n || isNew) showSave(n || 1, () => f.requestSubmit()); else hideSave(); };
-    const wireKeys = () => $$('[data-delkey]').forEach(b => b.onclick = () => { b.closest('.keyrow').remove(); dirty(); });
+    const wireKeys = () => $$('[data-delkey]').forEach(b => b.onclick = () => { b.closest('.keyrow').remove(); keysForModel(); dirty(); });
+    function keysForModel() {
+      const mm = f.model.value, n = modelKeyCount(mm), has = modelHasKeys(mm);
+      const rows = $$('#keys-list .keyrow').length;
+      $('#keycard').classList.toggle('hidden', !has);
+      $('#addkey').disabled = !has || rows >= n;
+      $('#keywhy').textContent = has
+        ? 'Watch a colleague and dial with one press, or dial only. This phone has ' + n + ' key' + (n === 1 ? '' : 's') + ', ' + rows + ' in use.'
+        : '';
+    }
     wireKeys();
+    f.model.addEventListener('change', keysForModel);
+    keysForModel();
     f.addEventListener('input', dirty); f.addEventListener('change', dirty);
-    $('#addkey').onclick = () => { if (!others.length) return toast('Add other numbers first', 'bad'); $('#keys-list').insertAdjacentHTML('beforeend', keyRow({ type: 'blf', ext: others[0].ext, label: '' })); wireKeys(); dirty(); };
+    $('#addkey').onclick = () => { if (!others.length) return toast('Add other numbers first', 'bad'); $('#keys-list').insertAdjacentHTML('beforeend', keyRow({ type: 'blf', ext: others[0].ext, label: '' })); wireKeys(); keysForModel(); dirty(); };
     if (isNew) {
       const next = async () => { try { const r = await api('GET', '/api/extensions/next?dept=' + encodeURIComponent(f.dept.value)); f.ext.value = r.ext || ''; base = snapshot(); } catch (err) { /* keep */ } };
       f.dept.addEventListener('change', next); next();
@@ -270,9 +292,12 @@
     if ($('#secrets')) $('#secrets').onclick = async () => {
       try {
         const r = await api('GET', '/api/extensions/' + e.ext + '/provisioning');
-        $('#secretbox').innerHTML = '<div class="note warn" style="margin-top:14px"><b>First-time setup for this phone</b> <span class="why">shown to administrators only; this view is recorded in History</span><dl class="kv" style="margin-top:8px">' +
-          (r.mac ? '<dt>Provisioning address</dt><dd class="mono">' + esc(r.url) + '</dd><dt>User name</dt><dd class="mono">' + esc(r.username) + '</dd><dt>Password</dt><dd class="mono">' + esc(r.password || '(created at the next Apply)') + '</dd>' : '<dt>Desk phone</dt><dd>No MAC on this number yet.</dd>') +
-          '<dt>Phone account password</dt><dd class="mono">' + esc(r.sipPassword || '(created at the next Apply)') + '</dd></dl></div>';
+        $('#secretbox').innerHTML = '<div class="note warn" style="margin-top:14px"><b>First-time setup for this phone</b> ' +
+          '<span class="why">' + esc((r.vendor || '') + (r.model ? ' ' + r.model : '')) + ' &middot; shown to administrators only; this view is recorded in History</span>' +
+          '<ol style="margin:10px 0 0 18px;padding:0;line-height:1.7">' + (r.notes || []).map(n => '<li class="mono" style="font-size:12.5px">' + esc(n) + '</li>').join('') + '</ol>' +
+          (r.files && r.files.length
+            ? '<p class="why" style="margin:10px 0 0">Files this phone fetches: ' + r.files.map(n => '<span class="mono">' + esc(n) + '</span>').join(', ') + '</p>'
+            : '<p class="why" style="margin:10px 0 0">Nothing generated for it yet; press Apply changes.</p>') + '</div>';
       } catch (err) { toast(err.message, 'bad'); }
     };
     f.onsubmit = async ev => {
