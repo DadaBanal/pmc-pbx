@@ -31,7 +31,8 @@ function makeEnv(overrides) {
     dataDir: data
   }, overrides || {});
   fs.writeFileSync(path.join(conf, 'config.json'), JSON.stringify(cfgJson, null, 2));
-  fs.copyFileSync(path.join(sample, 'directory.json'), path.join(conf, 'directory.json'));
+  // the tests own their directory; app/sample/directory.json is a showcase and may change at any time
+  fs.writeFileSync(path.join(conf, 'directory.json'), JSON.stringify(require('./fixture').directory(), null, 2));
   if (haveOpenssl()) {
     execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=localhost',
       '-keyout', cfgJson.keyFile, '-out', cfgJson.certFile], { stdio: 'ignore' });

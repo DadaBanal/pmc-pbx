@@ -23,7 +23,15 @@ jobs:
           echo "all files parse"
 
       - name: unit and API tests (fake engine)
-        run: node --test app/test/generate.test.js app/test/auth.test.js app/test/api.test.js
+        # every test file by name: a glob of the folder fails on this runner, and a file left off the list
+        # is a file CI never runs (phones.test.js was missed on 9 Oct 2026 and a real break reached main)
+        run: |
+          ls app/test/*.test.js
+          node --test app/test/generate.test.js app/test/auth.test.js app/test/api.test.js app/test/phones.test.js
+          # no test file may be left out of the line above
+          want=$(ls app/test/*.test.js | wc -l)
+          got=$(grep -o 'app/test/[a-z]*\.test\.js' .github/workflows/ci.yml | sort -u | wc -l)
+          test "$want" = "$got" || { echo "CI runs $got of $want test files"; exit 1; }
 
       - name: generator against the sample directory
         run: |

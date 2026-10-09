@@ -7,7 +7,8 @@ const path = require('path');
 const V = require('../lib/validate');
 const G = require('../lib/generate');
 
-const sample = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sample', 'directory.json'), 'utf8'));
+const fixture = require('./fixture');
+const sample = fixture.directory();
 const cfg = Object.assign(JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sample', 'config.json'), 'utf8')), { certFile: '/etc/pmc-pbx/secrets/cert.pem', keyFile: '/etc/pmc-pbx/secrets/key.pem' });
 
 test('the sample directory validates and normalization is idempotent', () => {
