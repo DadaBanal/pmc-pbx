@@ -11,6 +11,7 @@
  *   node app/test/ci-assert.js endpoints <directory.json> <pjsip-show-endpoints.txt>
  *   node app/test/ci-assert.js dialplan  <directory.json> <dialplan-show.txt>
  *   node app/test/ci-assert.js health    <directory.json> <health.json>
+ *   node app/test/ci-assert.js generated <directory.json> <out-dir>
  *
  * Exit 0 and a line saying what was proven, or exit 1 and what was missing.
  */
@@ -50,6 +51,39 @@ if (what === 'endpoints') {
       wantPhones + ' and ' + exts.length);
   }
   console.log('health agrees with the directory: ' + wantPhones + ' phones, ' + exts.length + ' extensions');
+} else if (what === 'generated') {
+  // filePath is the generator's output directory
+  const out = filePath;
+  const pjsip = read(out + '/asterisk/pjsip_pmc.conf');
+  const dialplan = read(out + '/asterisk/extensions_pmc.conf');
+  const index = JSON.parse(read(out + '/phones/index.json'));
+  const withMac = exts.filter(e => e.mac);
+
+  for (const e of exts) {
+    if (!pjsip.includes('[' + e.ext + '](pmc-endpoint)')) fail('no endpoint generated for ' + e.ext);
+    if (!dialplan.includes('exten => ' + e.ext + ',hint,PJSIP/' + e.ext)) fail('no hint generated for ' + e.ext);
+  }
+  // every handset whose driver generates a file must have one, present on disk and listed with a guard
+  for (const e of withMac) {
+    const mine = Object.keys(index).filter(n => index[n].mac === e.ext || index[n].mac === e.mac);
+    const shared = Object.keys(index).filter(n => index[n].auth === 'shared');
+    if (!mine.length && !shared.length) fail(e.ext + ' (' + e.mac + ') has no generated file and no shared file');
+    for (const n of mine) {
+      if (!fs.existsSync(out + '/phones/' + n)) fail('index names ' + n + ' but it is not on disk');
+      if (index[n].auth !== 'per-mac') fail(n + ' belongs to one handset but is not guarded per-mac');
+    }
+  }
+  for (const n of Object.keys(index)) {
+    if (!fs.existsSync(out + '/phones/' + n)) fail('index names ' + n + ' but it is not on disk');
+    if (!['per-mac', 'shared'].includes(index[n].auth)) fail(n + ' has no valid guard');
+  }
+  // nothing generated for a handset the directory does not have
+  const macs = new Set(withMac.map(e => e.mac));
+  for (const n of Object.keys(index)) {
+    if (index[n].mac && !macs.has(index[n].mac)) fail(n + ' was generated for a MAC the directory does not have');
+  }
+  console.log('generator output matches the directory: ' + exts.length + ' endpoints and hints, ' +
+    withMac.length + ' handsets, ' + Object.keys(index).length + ' files, every file guarded and on disk');
 } else {
   console.error('unknown check: ' + what);
   process.exit(2);

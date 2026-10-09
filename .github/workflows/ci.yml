@@ -41,12 +41,8 @@ jobs:
         run: |
           node app/gen.js --conf app/sample --out /tmp/out --check
           node app/gen.js --conf app/sample --out /tmp/out
-          test -s /tmp/out/asterisk/pjsip_pmc.conf
-          test -s /tmp/out/asterisk/extensions_pmc.conf
-          test -s /tmp/out/phones/001565aaaa01.cfg
-          test -s /tmp/out/phones/phonebook.xml
-          grep -q '^exten => 3901,hint,PJSIP/3901' /tmp/out/asterisk/extensions_pmc.conf
-          grep -q '^account.1.sip_server.1.transport_type = 2' /tmp/out/phones/001565aaaa01.cfg
+          # derived from the directory, so changing the fleet can never break this step
+          node app/test/ci-assert.js generated app/sample/directory.json /tmp/out
           echo "control: a broken directory must be refused"
           mkdir -p /tmp/bad && cp app/sample/config.json /tmp/bad/
           echo '{"extensions":[{"ext":"12","name":"x","mac":"zz"}]}' > /tmp/bad/directory.json
