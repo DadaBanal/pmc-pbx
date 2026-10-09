@@ -37,3 +37,20 @@ The phone also pulls `phonebook.xml` as a remote phonebook named PMC.
 the wildcard pmcne.ph certificate is from a public CA, so nothing is installed on the phone. The admin web
 password of the phone itself is set by provisioning in phase 5 (parameter `static.security.user_password`),
 never left at the factory default.
+
+## Other handsets, judged 9 Oct 2026
+
+Two were offered to PMC for sale. Both work; the record holds the full assessment in
+`docs/pbx-handset-options-offered-20261009.md`.
+
+| Model | Verdict | Why |
+|---|---|---|
+| **Yealink SIP-T30P** | Works, no new code, **but no buttons** | Same provisioning and security as the T31P (one account, PoE 802.3af class 1, TLS 1.3, SRTP, HTTPS auto-provision). Yealink's own docs: *"Line key does not apply to T30P/T30/T19 E2/T19P E2/CP920 phones"* and BLF *"is not available on the T30P/T30/T19 E2/T19P E2/CP920 IP phone."* The generator's `linekey.N.*` lines have nothing to apply to. Fit for corridors and single-purpose desks, not nurse stations |
+| **Avaya J179** | Works, needs a second template | Avaya's J100 SIP 4.1.10.0 release notes name **Asterisk R16** a supported Open SIP platform. Conditions: the unit must carry the Open SIP firmware load, not an Aura or IP Office one; it provisions from `46xxsettings.txt` over HTTP(S), so `lib/generate.js` needs an Avaya renderer beside the Yealink one; with Asterisk, set SRTP *SDP Negotiation Capability* to No and *Encrypt RTCP* to Yes, and disable Opus |
+
+**Buying second-hand Yealink:** check the MAC is not still bound to a previous owner's RPS account, which
+would hijack the phone on first boot, and that the admin password is not locked. Factory reset is a
+ten-second long-press of the OK key.
+
+**If the directory ever carries a T30P** add `T30P` to `MODELS` in `app/lib/validate.js` and
+`app/public/app.js`, and the generator should skip the `linekey` block for it.
