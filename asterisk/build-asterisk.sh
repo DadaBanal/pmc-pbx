@@ -26,6 +26,14 @@ apt-get update
 apt-get install -y build-essential wget gnupg ca-certificates libsrtp2-dev uuid-dev libxml2-dev \
     libncurses-dev libssl-dev libedit-dev libjansson-dev libsqlite3-dev pkg-config
 
+# Prefer IPv4 for every download in this build. A host that gets an AAAA answer but has no route to it fails
+# with "Network is unreachable" - and the failure lands inside Asterisk's own sounds Makefile during
+# `make install`, long after the tarball downloaded fine, which reads like a build fault and is not one.
+# Measured in CI on 9 Oct 2026 (downloads.asterisk.org resolved only to 2604:a880:400:d0::14:9001). The
+# hospital LAN has no IPv6 route either, so this belongs in the build and not only in CI.
+grep -q '^inet4_only' /etc/wgetrc 2>/dev/null || echo 'inet4_only = on' >> /etc/wgetrc
+grep -q '^precedence ::ffff:0:0/96' /etc/gai.conf 2>/dev/null || echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+
 mkdir -p "$WORK"; cd "$WORK"
 
 # ---- download and verify ----------------------------------------------------------------------
