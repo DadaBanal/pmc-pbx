@@ -1,7 +1,7 @@
 {
   "version": 0,
   "site": "PMC",
-  "note": "SAMPLE ONLY. Names and MACs here are placeholders, not real people or real phones. The live directory.json lives in /etc/pmc-pbx on the VM and is never committed. The mix matches the handsets bought for the pilot on 9 Oct 2026: three Yealink T30P and two Avaya J179, beside the T31P standard.",
+  "note": "SAMPLE ONLY, and a showcase: the tests use app/test/fixture.js instead. This mirrors the pilot fleet actually bought on 9 Oct 2026: four Yealink T30P. The Avaya J179 was not bought; its driver stays in app/lib/phones because it is written and proven, and one J179 line is kept here, without a MAC, so the mixed-vendor path keeps being exercised.",
   "departments": [
     { "name": "Nursing", "from": 1000, "to": 1999 },
     { "name": "Clinical", "from": 2000, "to": 2999 },
@@ -11,20 +11,16 @@
     { "name": "JRBY", "from": 5000, "to": 5999 }
   ],
   "extensions": [
-    { "ext": "3901", "name": "ICT Test Phone A", "dept": "ICT", "site": "PMC", "model": "T31P", "mac": "001565aaaa01", "voicemail": true,
-      "keys": [ { "type": "blf", "ext": "3902" } ] },
-    { "ext": "3902", "name": "ICT Test Phone B", "dept": "ICT", "site": "PMC", "model": "T31P", "mac": "001565aaaa02", "voicemail": true,
-      "keys": [ { "type": "blf", "ext": "3901" } ] },
-    { "ext": "1101", "name": "Nurse Station 1", "dept": "Nursing", "site": "PMC", "model": "J179", "mac": "ccddee001101", "voicemail": true,
-      "keys": [ { "type": "blf", "ext": "1102", "label": "Station 2" }, { "type": "blf", "ext": "3901", "label": "ICT" } ],
-      "notes": "Avaya J179, Open SIP load. Identity typed at the handset." },
-    { "ext": "1102", "name": "Nurse Station 2", "dept": "Nursing", "site": "PMC", "model": "J179", "mac": "ccddee001102", "voicemail": true,
-      "keys": [ { "type": "blf", "ext": "1101", "label": "Station 1" } ],
-      "notes": "Avaya J179, Open SIP load." },
-    { "ext": "1201", "name": "Corridor West", "dept": "Nursing", "site": "PMC", "model": "T30P", "mac": "001565bbbb01", "voicemail": false,
-      "notes": "T30P: no buttons on this model." },
-    { "ext": "1202", "name": "Corridor East", "dept": "Nursing", "site": "PMC", "model": "T30P", "mac": "001565bbbb02", "voicemail": false },
-    { "ext": "1203", "name": "Store Room", "dept": "Nursing", "site": "PMC", "model": "T30P", "mac": "001565bbbb03", "voicemail": false },
+    { "ext": "3901", "name": "ICT Test Phone A", "dept": "ICT", "site": "PMC", "model": "T30P", "mac": "001565bbbb01", "voicemail": true,
+      "notes": "Pilot handset 1 of 4. T30P has no buttons." },
+    { "ext": "3902", "name": "ICT Test Phone B", "dept": "ICT", "site": "PMC", "model": "T30P", "mac": "001565bbbb02", "voicemail": true,
+      "notes": "Pilot handset 2 of 4. The pair 3901 and 3902 proves the first call." },
+    { "ext": "1201", "name": "Corridor West", "dept": "Nursing", "site": "PMC", "model": "T30P", "mac": "001565bbbb03", "voicemail": false,
+      "notes": "Pilot handset 3 of 4." },
+    { "ext": "1202", "name": "Corridor East", "dept": "Nursing", "site": "PMC", "model": "T30P", "mac": "001565bbbb04", "voicemail": false,
+      "notes": "Pilot handset 4 of 4." },
+    { "ext": "1101", "name": "Nurse Station 1", "dept": "Nursing", "site": "PMC", "model": "J179", "mac": "", "voicemail": true,
+      "notes": "No handset yet. A station needs buttons to watch another extension, which the T30P cannot do." },
     { "ext": "4001", "name": "Roving Doctor", "dept": "Doctors", "site": "PMC", "model": "softphone", "mac": "", "voicemail": true }
   ]
 }
