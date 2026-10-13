@@ -81,7 +81,15 @@ fi
 rm -rf "asterisk-${VERSION}"
 tar xzf "$TARBALL"
 cd "asterisk-${VERSION}"
-contrib/scripts/install_prereq install
+# Asterisk's own install_prereq runs under `set -e`, and its package check ends in `grep -vF :`, which exits 1
+# when there is nothing to print - that is, when every package it wants is ALREADY installed. So on any re-run
+# it stops silently with status 1. Measured on PMC-PBX01, 13 Oct 2026 (22.11.0, line 6 `set -e`); CI never saw
+# it because every CI container starts empty. The packages this build depends on are installed explicitly above,
+# so a non-zero exit here is reported and tolerated. The module check after `make install` is what fails the
+# build if a dependency really is missing.
+if ! contrib/scripts/install_prereq install; then
+    echo "install_prereq exited non-zero - it does this when nothing is left to install. Continuing; the module check decides."
+fi
 
 # ---- configure and select modules -------------------------------------------------------------
 ./configure --with-jansson-bundled --with-pjproject-bundled
@@ -115,6 +123,16 @@ if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
 else
     echo "No systemd here (container?). Unit not installed; start with: /usr/sbin/asterisk -U asterisk -G asterisk"
 fi
+
+# The modules this PBX cannot run without. If any is missing a build dependency was absent, whatever any
+# earlier step reported - this is the check that makes tolerating install_prereq's exit status safe.
+MODDIR="/usr/lib/asterisk/modules"
+for m in res_srtp res_pjsip chan_pjsip app_voicemail res_ari; do
+    if [[ ! -f "${MODDIR}/${m}.so" ]]; then
+        echo "STOP: ${MODDIR}/${m}.so was not built - a build dependency is missing."; exit 4
+    fi
+done
+echo "Required modules present: res_srtp res_pjsip chan_pjsip app_voicemail res_ari."
 
 echo "== Built. Next: copy asterisk/conf/*.conf into /etc/asterisk, run app/gen.js, then start asterisk"
 echo "== Gate: /usr/sbin/asterisk -V must print Asterisk ${VERSION}"

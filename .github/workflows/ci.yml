@@ -102,6 +102,14 @@ jobs:
           grep -qx 'enable asterisk' /tmp/systemctl-calls.txt
           echo "unit installed; systemctl calls:"; cat /tmp/systemctl-calls.txt
 
+      - name: the build must be re-runnable on a host that already has it
+        run: |
+          # The second VM run on 13 Oct 2026 died silently: Asterisk's install_prereq exits 1 when nothing is
+          # left to install. Every CI container starts empty, so only a second run in the same container sees it.
+          SKIP_SIG=1 bash asterisk/build-asterisk.sh 22.11.0 2>&1 | tee /tmp/rerun.txt
+          grep -q 'Required modules present' /tmp/rerun.txt
+          /usr/sbin/asterisk -V | grep -q 'Asterisk 22.11.0'
+
       - name: version gate
         run: |
           /usr/sbin/asterisk -V | tee /tmp/version.txt
