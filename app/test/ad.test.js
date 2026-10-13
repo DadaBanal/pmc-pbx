@@ -73,6 +73,10 @@ test('config: Windows sign-in refuses to start without a certificate pin; networ
     assert.throws(withCfg({ ad: { url: 'ldaps://x', baseDN: 'DC=x', upnSuffix: '@x', groups: ['G'] } }), /ad\.pin is required/);
     assert.throws(withCfg({ phoneNetworks: ['10.2.0.0'] }), /phoneNetworks/);
     assert.doesNotThrow(withCfg({ phoneNetworks: ['10.2.0.0/22'] }), 'control: a proper network is accepted');
+    // the start-up failure of 13 Oct: provisioning on 0.0.0.0:443 swallows the phone site's 10.2.0.11:443
+    assert.throws(withCfg({ listen: { host: '0.0.0.0', port: 443 }, phoneSite: { host: '10.2.0.11', port: 443 } }), /would hold the same port/);
+    assert.throws(withCfg({ listen: { host: '10.2.0.10', port: 443 }, phoneSite: { host: '10.2.0.10', port: 443 } }), /would hold the same port/);
+    assert.doesNotThrow(withCfg({ listen: { host: '10.2.0.10', port: 443 }, phoneSite: { host: '10.2.0.11', port: 443 } }), 'control: the live layout is accepted');
   } finally { env.cleanup(); }
 });
 

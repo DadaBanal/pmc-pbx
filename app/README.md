@@ -146,7 +146,8 @@ networks (10.69.68.0/22, 10.17.80.0/22) and mobile phones on them are out, by de
 
 ### The phone site: no port in the address
 
-Dada: *"why still the port"*. `phoneSite` `{ "host": "10.2.0.11", "port": 443, "name": "phone.pmcne.ph" }` is a third
+Dada: *"why still the port"*. `phoneSite` `{ "host": "10.2.0.11", "port": 443, "name": "phone.pmcne.ph" }`, with `listen.host` set to `10.2.0.10` (with
+`0.0.0.0` the provisioning listener holds 443 on every address and the phone site cannot start; config refuses it), is a third
 listener on its own LAN address, so the address is `https://phone.pmcne.ph`. It serves the phone's files and the phone's
 API only: `/` goes to `/phone`, the admin screen's files and admin API answer 404 there, even for an admin. The
 internet-facing listener stays alone on 10.2.0.10:443. The wildcard certificate covers the name.

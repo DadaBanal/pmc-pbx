@@ -38,6 +38,13 @@ function loadConfig(confDir) {
   }
   // the phone site (optional): { host, port, name }, e.g. 10.2.0.11, 443, phone.pmcne.ph
   if (cfg.phoneSite) cfg.phoneSite = Object.assign({ port: 443 }, cfg.phoneSite);
+  // 13 Oct 2026 on PMC-PBX01: listen.host 0.0.0.0 holds port 443 on EVERY address, so the phone site's own address
+  // could not bind and the service failed to start. Two listeners on one port must each name their own address.
+  if (cfg.phoneSite && cfg.phoneSite.port && cfg.phoneSite.port === cfg.listen.port &&
+      (cfg.listen.host === '0.0.0.0' || cfg.phoneSite.host === '0.0.0.0' || cfg.listen.host === cfg.phoneSite.host)) {
+    throw new Error('config.json: listen (' + cfg.listen.host + ':' + cfg.listen.port + ') and phoneSite (' + cfg.phoneSite.host + ':' + cfg.phoneSite.port +
+      ') would hold the same port. Set listen.host to the provisioning address (e.g. 10.2.0.10) and phoneSite.host to its own (e.g. 10.2.0.11).');
+  }
   cfg.provUrl = cfg.provUrl || ('https://' + cfg.fqdn + '/prov/');
   cfg.banAfter = cfg.banAfter || 10;
   cfg.banWindowSec = cfg.banWindowSec || 600;
