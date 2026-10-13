@@ -104,7 +104,7 @@ async function password(prompt) {
         process.stdin.on('error', reject);
       }).catch(e => { console.error(e.message); process.exit(2); });
       let members;
-      try { members = JSON.parse(raw); } catch (e) { console.error('stdin is not JSON'); process.exit(2); }
+      try { members = JSON.parse(raw); } catch (e) { console.error('stdin is not JSON (' + Buffer.byteLength(raw) + ' bytes, starts ' + Buffer.from(raw).subarray(0, 16).toString('hex') + ', ends ' + Buffer.from(raw).subarray(-8).toString('hex') + '): ' + e.message.slice(0, 80)); process.exit(2); }
       if (!Array.isArray(members) || members.length > 5000 || !members.every(m => m && typeof m.sam === 'string' && m.sam.length <= 64 && (m.name === undefined || (typeof m.name === 'string' && m.name.length <= 128)))) {
         console.error('stdin must be a list of { sam, name, group }'); process.exit(2);
       }
