@@ -105,6 +105,19 @@ test('the phone refuses every network it is not enabled on, and the admin screen
   assert.equal((await signIn(A, 'admin', 'AdminPassw0rd!')).status, 200);
 });
 
+test('the stand-in directory answers the way DND-AD01 does: every length in long form, 4 bytes', () => {
+  // 14 Oct 2026: the real DC sends 0x84 + 4 length bytes even for tiny values; a parser capped at 3 passed every test
+  // against short lengths and broke every real sign-in. Guard the stand-in's realism, or the tests prove nothing.
+  const { adStyle } = require('./fake-dc');
+  const msg = ldap.seq(0x30, [ldap.int(0x02, 1), ldap.seq(0x61, [ldap.tlv(0x0a, Buffer.from([0])), ldap.str(0x04, ''), ldap.str(0x04, '')])]);
+  const out = adStyle(msg);
+  assert.equal(out[1], 0x84, 'outer length is 4-byte long form');
+  const t = ldap.readTlv(out, 0);
+  assert.ok(t && t.next === out.length, 'and the client parses it whole');
+  const [idT, op] = ldap.children(out, t);
+  assert.equal(op.tag, 0x61); assert.equal(ldap.num(out, idT), 1);
+});
+
 test('the directory check: password by bind, then group membership; refusals that never reach the directory', { skip, timeout: 30000 }, async () => {
   const env = makeEnv({});
   const cert = fs.readFileSync(env.cfg.certFile), key = fs.readFileSync(env.cfg.keyFile);

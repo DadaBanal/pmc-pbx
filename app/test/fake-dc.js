@@ -5,6 +5,21 @@
 const tls = require('tls');
 const L = require('../lib/ldap');
 
+// AD writes every long-form BER length as 0x84 + 4 bytes, even for 5. Re-encode the stand-in's replies the same way so
+// the client is tested against what DND-AD01 really sends (14 Oct 2026: a 3-byte cap passed every test and broke prod).
+function adStyle(buf) { const parts = []; walkInto(buf, parts); return Buffer.concat(parts); }
+function walkInto(b, parts) {
+  let i = 0;
+  while (i < b.length) {
+    const t = L.readTlv(b, i);
+    let inner = b.subarray(t.start, t.end);
+    if ((b[i] & 0x20) !== 0) { const sub = []; walkInto(inner, sub); inner = Buffer.concat(sub); } // constructed: re-encode inside too
+    const n = inner.length;
+    parts.push(Buffer.from([b[i], 0x84, (n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]), inner);
+    i = t.next;
+  }
+}
+
 const GROUP_DN = 'CN=PMO Team,OU=Groups,DC=pmcne,DC=ph';
 
 // people: { sam: { password, name, groups: [cn], sub } }  sub = AD's "data xxx" reason to send instead of success
@@ -21,8 +36,9 @@ function fakeDc(cert, key, people) {
     else if (t.tag === 0xa9) out.push({ kind: 'inChain', rule: L.text(buf, c[0]), attr: L.text(buf, c[1]), value: L.text(buf, c[2]) });
     return out;
   }
-  const server = tls.createServer({ cert, key }, sock => {
+  const server = tls.createServer({ cert, key }, rawSock => {
     seen.connections++;
+    const sock = { write: b => rawSock.write(adStyle(b)), end: () => rawSock.end(), on: (e, f) => rawSock.on(e, f) };
     let buf = Buffer.alloc(0), bound = null;
     sock.on('error', () => {});
     sock.on('data', d => {
@@ -62,4 +78,4 @@ function fakeDc(cert, key, people) {
   return { server, seen, GROUP_DN };
 }
 
-module.exports = { fakeDc };
+module.exports = { fakeDc, adStyle };

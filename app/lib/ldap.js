@@ -27,10 +27,13 @@ function readTlv(buf, i) {
   let len = buf[i + 1], p = i + 2;
   if (len & 0x80) {
     const n = len & 0x7f;
-    if (n < 1 || n > 3) throw new Error('BER length of ' + n + ' bytes'); // nothing AD sends us needs more than 16 MB
+    // Active Directory writes EVERY long-form length in 4 bytes (0x84 00 00 00 xx), however small the value. 14 Oct
+    // 2026: a cap of 3 length bytes refused every real reply and broke all sign-ins. Cap the VALUE instead.
+    if (n < 1 || n > 4) throw new Error('BER length of ' + n + ' bytes');
     if (p + n > buf.length) return null;
     len = 0;
     for (let k = 0; k < n; k++) len = len * 256 + buf[p + k];
+    if (len > 16 * 1024 * 1024) throw new Error('BER length ' + len + ' is beyond anything the directory sends');
     p += n;
   }
   if (p + len > buf.length) return null;

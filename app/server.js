@@ -464,8 +464,9 @@ function start(cfg, opts) {
   async function adLogin(req, res, ip, name, password, acct, fail) {
     const r = await ldap.checkPerson(cfg.ad, name, password);
     if (!r.ok) {
-      // an outage still counts against the name: otherwise a stalled directory would be a free retry
-      if (r.unavailable) { accountBans.fail(acct); log('phone ' + ip + ' AD sign-in for ' + (name || '?') + ' UNAVAILABLE: ' + r.reason); return H.sendJson(res, 503, { error: 'The hospital directory did not answer. Try again in a minute.' }); }
+      // an outage does NOT count against the name: 14 Oct 2026 an outage (our own parser fault) put staff in a 15-minute
+      // cooldown for something that was not theirs; the per-address limit still applies
+      if (r.unavailable) { loginBans.fail(ip); log('phone ' + ip + ' AD sign-in for ' + (name || '?') + ' UNAVAILABLE: ' + r.reason); return H.sendJson(res, 503, { error: 'The hospital directory did not answer. Try again in a minute.' }); }
       fail('AD: ' + r.reason);
       if (/^not in /.test(r.reason)) return H.sendJson(res, 403, { error: 'Your Windows account is not on the phone list. Ask PMO ICT.' });
       if (AD_SAY.has(r.reason)) return H.sendJson(res, 401, { error: 'Windows says: ' + r.reason + '.' });
