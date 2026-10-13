@@ -68,4 +68,44 @@ function remove(cfg, store, sam, who) {
   return { user: u, ext: e ? e.ext : null };
 }
 
-module.exports = { load, save, find, add, update, remove, SAM_RE };
+// Bring the list in line with the AD groups (Dada, 14 Oct 2026: "auto activate extensions on those once added to the
+// group"). members: [{ sam, name, group }] as read from AD by DND-SQL01. Adds anyone new with a browser phone;
+// switches off anyone no longer in any group (marked disabledBy 'sync'), and back on if they return; never touches
+// someone PMO ICT switched off by hand (disabledBy 'admin'). Refuses to switch anyone off when the member list is
+// empty or would take more than half the list: a failed or partial AD read must never cut everyone off.
+function reconcile(cfg, store, members, who) {
+  const out = { added: [], reEnabled: [], disabled: [], refused: null, skipped: [] };
+  const want = new Map();
+  for (const m of Array.isArray(members) ? members : []) {
+    const sam = String((m && m.sam) || '').toLowerCase();
+    if (!SAM_RE.test(sam)) { out.skipped.push(String((m && m.sam) || '?')); continue; }
+    if (!want.has(sam)) want.set(sam, { sam, name: String(m.name || sam), group: String(m.group || '') });
+  }
+  for (const m of want.values()) {
+    const have = find(load(cfg), m.sam);
+    if (!have) {
+      try { const r = add(cfg, store, m.sam, m.name, m.group, who); out.added.push(m.sam + ' ' + r.ext); }
+      catch (e) { out.skipped.push(m.sam + ': ' + e.message); }
+    } else if (have.disabled && have.disabledBy === 'sync') {
+      update(cfg, m.sam, { disabled: false, disabledBy: null });
+      store.audit({ who, action: 'edit phone user', detail: m.sam + ': switched on (back in ' + (m.group || 'a phone group') + ')' });
+      out.reEnabled.push(m.sam);
+    }
+  }
+  const data = load(cfg);
+  const leaving = data.users.filter(u => !u.disabled && !want.has(u.sam));
+  const active = data.users.filter(u => !u.disabled).length;
+  if (leaving.length && (want.size === 0 || leaving.length > Math.max(1, Math.floor(active / 2)))) {
+    out.refused = 'would switch off ' + leaving.length + ' of ' + active + ' active phone users (AD returned ' + want.size + ' members): refused, nobody switched off';
+    store.audit({ who, action: 'phone user sync refused', detail: out.refused });
+    return out;
+  }
+  for (const u of leaving) {
+    update(cfg, u.sam, { disabled: true, disabledBy: 'sync' });
+    store.audit({ who, action: 'edit phone user', detail: u.sam + ': switched off (no longer in a phone group)' });
+    out.disabled.push(u.sam);
+  }
+  return out;
+}
+
+module.exports = { load, save, find, add, update, remove, reconcile, SAM_RE };

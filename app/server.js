@@ -333,7 +333,8 @@ function start(cfg, opts) {
     ['PUT', /^\/api\/phone-users\/([a-z0-9._-]+)$/, 'admin', async ctx => {
       const body = await ctx.body();
       if (body.disabled === undefined) throw new HttpError(400, 'nothing to change');
-      const u = PU.update(cfg, ctx.params[0], { disabled: !!body.disabled });
+      // disabledBy 'admin': the group sync never switches back on someone PMO ICT switched off by hand
+      const u = PU.update(cfg, ctx.params[0], { disabled: !!body.disabled, disabledBy: body.disabled ? 'admin' : null });
       if (!u) throw new HttpError(404, 'phone user not found');
       if (u.disabled) dropPhones('ad:' + u.sam, 'switched off');
       store.audit({ who: ctx.user.name, action: 'edit phone user', detail: u.sam + ': ' + (u.disabled ? 'switched off' : 'switched on') });

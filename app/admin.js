@@ -11,8 +11,10 @@
  *   node admin.js link <user> <ext|none>    link a sign-in to one extension (the browser phone), or unlink
  *   node admin.js phoneuser <sam> <name...>  put a Windows account on the phone users list with a browser phone
  *   node admin.js phoneusers                the phone users list
+ *   node admin.js sync-members [--dry-run]  read AD group members as JSON on stdin, reconcile the list, apply if added
  * Config dir: PMC_PBX_CONF (default /etc/pmc-pbx).
  */
+const fs = require('fs');
 const readline = require('readline');
 const { loadConfig } = require('./lib/config');
 const { Store } = require('./lib/store');
@@ -86,6 +88,36 @@ async function password(prompt) {
       const display = (a2 + ' ' + name).trim();
       const r = PU.add(cfg, store, a1, display, cfg.ad ? cfg.ad.groups[0] : '', 'cli');
       console.log(r.created ? a1 + ' added as ' + r.ext + ' "' + display + '". Run apply.' : a1 + ' is already on the list as ' + r.user.ext);
+      break;
+    }
+    case 'sync-members': {
+      // stdin: [{ "sam": "...", "name": "...", "group": "..." }, ...] from DND-SQL01's scheduled AD read. Strictly
+      // parsed: anything that is not that shape is refused whole. Applies only what it added, and only when nothing
+      // else is waiting, so a sync never pushes someone's unapplied edits live.
+      const dry = a1 === '--dry-run';
+      const raw = fs.readFileSync(0, 'utf8');
+      let members;
+      try { members = JSON.parse(raw); } catch (e) { console.error('stdin is not JSON'); process.exit(2); }
+      if (!Array.isArray(members) || members.length > 5000 || !members.every(m => m && typeof m.sam === 'string' && m.sam.length <= 64 && (m.name === undefined || (typeof m.name === 'string' && m.name.length <= 128)))) {
+        console.error('stdin must be a list of { sam, name, group }'); process.exit(2);
+      }
+      if (dry) {
+        const have = new Set(PU.load(cfg).users.map(u => u.sam));
+        const inAd = new Set(members.map(m => String(m.sam).toLowerCase()));
+        console.log('would add: ' + (members.filter(m => !have.has(String(m.sam).toLowerCase())).map(m => m.sam).join(', ') || 'none'));
+        console.log('would switch off: ' + (PU.load(cfg).users.filter(u => !u.disabled && !inAd.has(u.sam)).map(u => u.sam).join(', ') || 'none'));
+        break;
+      }
+      const m0 = store.loadManifest(), d0 = V.normalizeDirectory(store.loadDirectory());
+      const clean = !!m0 && m0.directoryVersion === d0.version;
+      const r = PU.reconcile(cfg, store, members, 'ad-sync');
+      console.log('added: ' + (r.added.join(', ') || 'none') + ' | back on: ' + (r.reEnabled.join(', ') || 'none') + ' | switched off: ' + (r.disabled.join(', ') || 'none') + (r.refused ? ' | REFUSED: ' + r.refused : '') + (r.skipped.length ? ' | skipped: ' + r.skipped.join('; ') : ''));
+      if (r.added.length && clean) {
+        const ap = await applyChanges(cfg, store, 'ad-sync');
+        console.log('apply: ' + (ap.ok ? 'ok, verified ' + ap.verified.endpoints + ' extensions' : 'FAILED ' + (ap.error || (ap.problems || []).join('; '))));
+        if (!ap.ok) process.exit(1);
+      } else if (r.added.length) console.log('apply: NOT run, other changes are waiting for PMO ICT');
+      if (r.refused) process.exit(3);
       break;
     }
     case 'phoneusers': {

@@ -309,3 +309,72 @@ test('switching a phone user off closes the phone connection that is already ope
   while (!closed && Date.now() - t0 < 3000) await new Promise(res => setTimeout(res, 20));
   assert.equal(closed, true, 'switching off closed the connection that was already open');
 });
+
+// ------------------------------------------------------------------ the AD group sync (Dada, 14 Oct 2026)
+test('group sync: adds new members with a phone, is idempotent, follows people out of and back into the groups', { skip, timeout: 60000 }, async () => {
+  const env = makeEnv({ ad: { url: 'ldaps://x:1', pin: 'AA', baseDN: 'DC=x', upnSuffix: '@pmcne.ph', groups: ['PMO Team', 'PMC Phone System Users'], dept: 'ICT' } });
+  const st = new Store(env.cfg);
+  try {
+    const team = [{ sam: 'Ana.Reyes', name: 'Ana Reyes', group: 'PMO Team' }, { sam: 'ben.cruz', name: 'Ben Cruz', group: 'PMC Phone System Users' }, { sam: 'cara.lim', name: 'Cara Lim', group: 'PMO Team' }];
+    let r = PU.reconcile(env.cfg, st, team, 'ad-sync');
+    assert.deepEqual(r.added.map(x => x.split(' ')[0]), ['ana.reyes', 'ben.cruz', 'cara.lim']);
+    const dir = st.loadDirectory();
+    for (const u of PU.load(env.cfg).users) assert.ok(dir.extensions.some(e => e.ext === u.ext && e.model === 'webphone'), u.sam + ' has a browser phone');
+    // second run: nothing changes
+    r = PU.reconcile(env.cfg, st, team, 'ad-sync');
+    assert.deepEqual([r.added, r.reEnabled, r.disabled, r.refused], [[], [], [], null]);
+    // cara leaves the groups: switched off by the sync; ben switched off by PMO ICT by hand
+    PU.update(env.cfg, 'ben.cruz', { disabled: true, disabledBy: 'admin' });
+    r = PU.reconcile(env.cfg, st, team.filter(m => m.sam !== 'cara.lim'), 'ad-sync');
+    assert.deepEqual(r.disabled, ['cara.lim']);
+    assert.equal(PU.find(PU.load(env.cfg), 'cara.lim').disabledBy, 'sync');
+    // cara comes back: switched on again; ben stays off, because a person switched him off
+    r = PU.reconcile(env.cfg, st, team, 'ad-sync');
+    assert.deepEqual(r.reEnabled, ['cara.lim']);
+    assert.equal(PU.find(PU.load(env.cfg), 'ben.cruz').disabled, true, 'the sync never overrides a hand switch-off');
+    // junk in the member list is skipped, not added
+    r = PU.reconcile(env.cfg, st, team.concat([{ sam: 'bad name;rm', name: 'x' }]), 'ad-sync');
+    assert.deepEqual(r.added, []); assert.equal(r.skipped.length, 1);
+  } finally { env.cleanup(); }
+});
+
+test('group sync: a failed or partial AD read never switches people off', { skip, timeout: 60000 }, async () => {
+  const env = makeEnv({ ad: { url: 'ldaps://x:1', pin: 'AA', baseDN: 'DC=x', upnSuffix: '@pmcne.ph', groups: ['PMO Team'], dept: 'ICT' } });
+  const st = new Store(env.cfg);
+  try {
+    const team = ['a.one', 'b.two', 'c.three', 'd.four'].map(sam => ({ sam, name: sam, group: 'PMO Team' }));
+    PU.reconcile(env.cfg, st, team, 'ad-sync');
+    let r = PU.reconcile(env.cfg, st, [], 'ad-sync');
+    assert.ok(r.refused, 'an empty AD answer is refused');
+    assert.equal(PU.load(env.cfg).users.filter(u => u.disabled).length, 0, 'nobody switched off');
+    r = PU.reconcile(env.cfg, st, team.slice(0, 1), 'ad-sync');
+    assert.ok(r.refused, 'losing 3 of 4 at once is refused');
+    assert.equal(PU.load(env.cfg).users.filter(u => u.disabled).length, 0);
+    // control: one person leaving at a time is allowed
+    r = PU.reconcile(env.cfg, st, team.slice(0, 3), 'ad-sync');
+    assert.equal(r.refused, null); assert.deepEqual(r.disabled, ['d.four']);
+  } finally { env.cleanup(); }
+});
+
+test('the sync command the scheduled task runs: strict input, adds and applies, refuses junk whole', { skip, timeout: 60000 }, async () => {
+  const { execFileSync, spawnSync } = require('child_process');
+  const env = makeEnv({ ad: { url: 'ldaps://x:1', pin: 'AA', baseDN: 'DC=x', upnSuffix: '@pmcne.ph', groups: ['PMO Team'], dept: 'ICT' } });
+  try {
+    const run = input => spawnSync(process.execPath, [path.join(__dirname, '..', 'admin.js'), 'sync-members'], {
+      input, encoding: 'utf8', env: Object.assign({}, process.env, { PMC_PBX_CONF: env.conf, FAKE_PJSIP_FILE: path.join(env.cfg.outDir, 'asterisk', 'pjsip_pmc.conf') }) });
+    // a running PBX: applied once, so the sync may apply what it adds
+    process.env.FAKE_PJSIP_FILE = path.join(env.cfg.outDir, 'asterisk', 'pjsip_pmc.conf');
+    assert.equal((await applyChanges(env.cfg, new Store(env.cfg), 'test')).ok, true);
+    let r = run(JSON.stringify([{ sam: 'ana.reyes', name: 'Ana Reyes', group: 'PMO Team' }]));
+    assert.equal(r.status, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, /added: ana\.reyes 39\d\d/);
+    assert.match(r.stdout, /apply: ok, verified/);
+    // junk is refused whole, nothing added
+    for (const bad of ['not json', '{"sam":"x"}', JSON.stringify([{ sam: 7 }]), JSON.stringify([{ sam: 'a'.repeat(65) }])]) {
+      r = run(bad);
+      assert.equal(r.status, 2, 'refused: ' + bad);
+    }
+    assert.equal(PU.load(env.cfg).users.length, 1);
+    void execFileSync;
+  } finally { env.cleanup(); delete process.env.FAKE_PJSIP_FILE; }
+});
