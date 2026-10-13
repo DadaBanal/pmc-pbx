@@ -19,7 +19,9 @@ function loadConfig(confDir) {
   cfg.keyFile = cfg.keyFile || path.join(cfg.secretsDir, 'key.pem');
   cfg.listen = Object.assign({ host: '0.0.0.0', port: 443 }, cfg.listen || {});
   cfg.admin = Object.assign({ host: '127.0.0.1', port: 8443, sessionHours: 12 }, cfg.admin || {});
-  cfg.asterisk = Object.assign({ command: ['/usr/sbin/asterisk'], timeoutMs: 15000 }, cfg.asterisk || {});
+  // wsHost/wsPort: Asterisk's own HTTP server, loopback only (asterisk/conf/http.conf), where the browser phone's
+  // signed-in WebSocket is passed through to
+  cfg.asterisk = Object.assign({ command: ['/usr/sbin/asterisk'], timeoutMs: 15000, wsHost: '127.0.0.1', wsPort: 8088 }, cfg.asterisk || {});
   cfg.sipPort = cfg.sipPort || 5061;
   cfg.provUrl = cfg.provUrl || ('https://' + cfg.fqdn + '/prov/');
   cfg.banAfter = cfg.banAfter || 10;

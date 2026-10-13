@@ -14,7 +14,8 @@
   const modelIds = () => Object.keys(MODELSPEC);
   const modelHasKeys = m => !!(MODELSPEC[m] && MODELSPEC[m].blf && MODELSPEC[m].lineKeys > 0);
   const modelKeyCount = m => (MODELSPEC[m] ? MODELSPEC[m].lineKeys : 0);
-  const ROLES = { viewer: 1, editor: 2, admin: 3 };
+  // phone: staff on the browser phone only (phone.html); they never see this screen
+  const ROLES = { phone: 1, viewer: 2, editor: 3, admin: 4 };
   // Engine states: "Not in use", "In use", "Busy", "Ringing", "On hold", "Unavailable". Only the first word decides.
   const onCall = state => /^(in use|busy|ringing|on hold)/i.test(String(state || '').trim());
   const PAGES = [
@@ -78,7 +79,7 @@
     const nav = $('#nav');
     nav.innerHTML = PAGES.filter(p => !p.role || can(p.role)).map(p => '<a class="top" href="#/' + p.key + '" data-key="' + p.key + '" title="' + esc(p.label) + '">' + icon(p.icon) + '<span class="lbl">' + esc(p.label) + '</span></a>').join('') +
       (can('editor') ? '<a class="newbtn" href="#/phone/new" title="New phone (n)">' + icon('plus') + '<span class="lbl">New phone</span></a>' : '');
-    $('#who').innerHTML = '<a href="#/password" class="name" title="Change my password">' + esc(S.me.name) + '</a><span class="sep">&middot;</span><span class="muted">' + esc(S.me.role) + '</span><span class="sep">&middot;</span><a href="#" id="out">sign out</a>' +
+    $('#who').innerHTML = (S.me.ext ? '<a href="/phone" title="Open my browser phone, ' + esc(S.me.ext) + '">My phone</a><span class="sep">&middot;</span>' : '') + '<a href="#/password" class="name" title="Change my password">' + esc(S.me.name) + '</a><span class="sep">&middot;</span><span class="muted">' + esc(S.me.role) + '</span><span class="sep">&middot;</span><a href="#" id="out">sign out</a>' +
       '<button class="iconbtn" id="pal-open" type="button" title="Search and jump (Ctrl+K)" aria-label="Search and jump">' + icon('search') + '</button><span class="kbd">Ctrl K</span>' +
       '<button class="iconbtn" id="keys-open" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">' + icon('keyboard') + '</button>' +
       '<button class="iconbtn" id="textsize" type="button" title="Text size" aria-label="Text size"><b style="font-size:13px;letter-spacing:-.5px">Aa</b></button>' +
@@ -135,10 +136,10 @@
       '<form id="login"><div><label>Name</label><input name="name" autocomplete="username" required autofocus></div>' +
       '<div><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>' +
       '<button class="primary" type="submit">Sign in</button></form></div>' +
-      '<p class="why" style="text-align:center">Accounts are given by ICT. Viewers see, editors change phones, administrators run the system.</p></div>';
+      '<p class="why" style="text-align:center">Accounts are given by ICT. Viewers see, editors change phones, administrators run the system. Staff with a browser phone go straight to it.</p></div>';
     $('#login').onsubmit = async ev => {
       ev.preventDefault(); const f = ev.target; busy($('button', f), true);
-      try { S.me = await api('POST', '/api/login', { name: f.name.value, password: f.password.value }); await loadAll(); renderShell(); if (!location.hash) location.hash = '#/overview'; else route(); }
+      try { S.me = await api('POST', '/api/login', { name: f.name.value, password: f.password.value }); if (S.me.role === 'phone') { location.replace('/phone'); return; } await loadAll(); renderShell(); if (!location.hash) location.hash = '#/overview'; else route(); }
       catch (e) { toast(e.message, 'bad'); busy($('button', f), false); }
     };
   }
@@ -349,16 +350,20 @@
   async function renderUsers() {
     let users = [];
     try { users = await api('GET', '/api/users'); } catch (e) { toast(e.message, 'bad'); }
-    $('#main').innerHTML = '<h1>Users</h1><p class="sub">Viewer sees. Editor adds and changes phones and presses Apply. Admin also manages departments, users and first-time setup details.</p>' +
-      '<div class="grid2"><div class="card"><h3>' + icon('users') + 'Who can sign in</h3><table class="grid"><thead><tr><th>Name</th><th>Role</th><th>Created</th><th></th></tr></thead><tbody>' +
-      users.map(u => '<tr' + (u.disabled ? ' style="opacity:.6"' : '') + '><td>' + esc(u.name) + (u.disabled ? ' <span class="pill">disabled</span>' : '') + (u.name === S.me.name ? ' <span class="pill live">you</span>' : '') + '</td><td><select data-role="' + esc(u.name) + '"' + (u.name === S.me.name ? ' disabled' : '') + ' style="width:auto">' + ['viewer', 'editor', 'admin'].map(r => '<option' + (r === u.role ? ' selected' : '') + '>' + r + '</option>').join('') + '</select></td><td class="muted">' + esc((u.createdAt || '').slice(0, 10)) + '</td>' +
+    const ROLE_NAMES = ['phone', 'viewer', 'editor', 'admin'];
+    $('#main').innerHTML = '<h1>Users</h1><p class="sub">Phone uses only their own browser phone. Viewer sees the directory. Editor adds and changes phones and presses Apply. Admin also manages departments, users and first-time setup details. Anyone with a linked extension can use the browser phone at /phone; that extension must be a "PMC browser phone".</p>' +
+      '<div class="grid2"><div class="card"><h3>' + icon('users') + 'Who can sign in</h3><table class="grid"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Created</th><th></th></tr></thead><tbody>' +
+      users.map(u => '<tr' + (u.disabled ? ' style="opacity:.6"' : '') + '><td>' + esc(u.name) + (u.disabled ? ' <span class="pill">disabled</span>' : '') + (u.name === S.me.name ? ' <span class="pill live">you</span>' : '') + '</td><td><select data-role="' + esc(u.name) + '"' + (u.name === S.me.name ? ' disabled' : '') + ' style="width:auto">' + ROLE_NAMES.map(r => '<option' + (r === u.role ? ' selected' : '') + '>' + r + '</option>').join('') + '</select></td>' +
+        '<td><input data-ext="' + esc(u.name) + '" value="' + esc(u.ext || '') + '" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="none" aria-label="Linked extension for ' + esc(u.name) + '" style="width:6.5em"></td><td class="muted">' + esc((u.createdAt || '').slice(0, 10)) + '</td>' +
         '<td class="right"><button class="ghost small" data-reset="' + esc(u.name) + '">' + icon('lock') + 'Reset password</button> ' + (u.name === S.me.name ? '' : '<button class="ghost small" data-toggle="' + esc(u.name) + '" data-dis="' + (u.disabled ? '0' : '1') + '">' + (u.disabled ? 'Enable' : 'Disable') + '</button>') + '</td></tr>').join('') + '</tbody></table></div>' +
-      '<div class="card"><h3>' + icon('plus') + 'Add a user</h3><form id="uf"><div class="fields"><div class="field"><label>Name (lower case)</label><input name="name" required pattern="[a-z][a-z0-9._-]{1,31}" placeholder="maria.santos"></div><div class="field"><label>Role</label><select name="role"><option>viewer</option><option>editor</option><option>admin</option></select></div>' +
+      '<div class="card"><h3>' + icon('plus') + 'Add a user</h3><form id="uf"><div class="fields"><div class="field"><label>Name (lower case)</label><input name="name" required pattern="[a-z][a-z0-9._-]{1,31}" placeholder="maria.santos"></div><div class="field"><label>Role</label><select name="role"><option>phone</option><option selected>viewer</option><option>editor</option><option>admin</option></select></div>' +
+      '<div class="field"><label>Linked extension (browser phone, optional)</label><input name="ext" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="e.g. 1201"></div>' +
       '<div class="field"><label>Temporary password (10+ characters)</label><input name="password" type="password" required minlength="10" autocomplete="new-password"></div></div><div class="actions"><button class="primary" type="submit">' + icon('plus') + 'Add user</button></div></form></div></div>';
     $$('[data-role]').forEach(s => s.onchange = async () => { try { await api('PUT', '/api/users/' + s.dataset.role, { role: s.value }); toast('Role saved', 'ok'); } catch (e) { toast(e.message, 'bad'); renderUsers(); } });
+    $$('[data-ext]').forEach(i => i.onchange = async () => { try { await api('PUT', '/api/users/' + i.dataset.ext, { ext: i.value.trim() }); toast(i.value.trim() ? 'Linked to ' + i.value.trim() : 'Phone unlinked', 'ok'); } catch (e) { toast(e.message, 'bad'); renderUsers(); } });
     $$('[data-reset]').forEach(b => b.onclick = async () => { const p = prompt('New temporary password for ' + b.dataset.reset + ' (10+ characters)'); if (!p) return; try { await api('PUT', '/api/users/' + b.dataset.reset, { password: p }); toast('Password reset', 'ok'); } catch (e) { toast(e.message, 'bad'); } });
     $$('[data-toggle]').forEach(b => b.onclick = async () => { try { await api('PUT', '/api/users/' + b.dataset.toggle, { disabled: b.dataset.dis === '1' }); renderUsers(); } catch (e) { toast(e.message, 'bad'); } });
-    $('#uf').onsubmit = async ev => { ev.preventDefault(); const f = ev.target; try { await api('POST', '/api/users', { name: f.name.value, role: f.role.value, password: f.password.value }); toast('User added', 'ok'); renderUsers(); } catch (e) { toast(e.message, 'bad'); } };
+    $('#uf').onsubmit = async ev => { ev.preventDefault(); const f = ev.target; try { await api('POST', '/api/users', { name: f.name.value, role: f.role.value, password: f.password.value, ext: f.ext.value.trim() }); toast('User added', 'ok'); renderUsers(); } catch (e) { toast(e.message, 'bad'); } };
   }
 
   function renderPassword() {
@@ -424,6 +429,7 @@
   async function boot() {
     applyPrefs();
     try { S.me = await api('GET', '/api/me'); } catch (e) { return; }
+    if (S.me.role === 'phone') { location.replace('/phone'); return; }
     await loadAll(); renderShell(); route();
   }
   renderLogin();

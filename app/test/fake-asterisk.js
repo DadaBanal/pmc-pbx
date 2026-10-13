@@ -11,7 +11,7 @@ if (process.env.FAKE_DOWN) { process.stderr.write('Unable to connect to remote a
 
 function exts() {
   if (process.env.FAKE_STALE) return ['1101', '3901', '3902']; // an engine that kept its old config after a reload
-  try { return Array.from(fs.readFileSync(process.env.FAKE_PJSIP_FILE || '', 'utf8').matchAll(/^\[(\d{4})\]\(pmc-endpoint\)/gm)).map(m => m[1]); }
+  try { return Array.from(fs.readFileSync(process.env.FAKE_PJSIP_FILE || '', 'utf8').matchAll(/^\[(\d{4})\]\(pmc-(?:endpoint|webrtc)\)/gm)).map(m => m[1]); }
   catch (e) { return []; }
 }
 

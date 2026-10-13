@@ -96,6 +96,29 @@ and `extensions.conf` carry `#include /var/lib/pmc-pbx/out/asterisk/...`.
 hold every extension and hint in the directory. The sudoers line is what lets the screen reload the engine
 without running as root.
 
+## The browser phone (PMC Phone)
+
+Dada, 13 Oct 2026: *"start building softphones with the same theme as the desk"*. Staff call from any PC with no
+install, at `https://pbx.pmcne.ph:8443/phone`, in the same theme as this screen and the PSA desk.
+
+| Piece | What it is |
+|---|---|
+| `public/phone.html`, `phone.js` | the phone screen: dial pad, phone book, recent calls, incoming-call box, mute, hold, keypad tones |
+| `public/sip.js` | the SIP user agent, plain JavaScript (SIP over WebSocket, RFC 7118; digest auth with its own MD5). The same file runs in Node for the tests |
+| model `webphone` | "PMC browser phone (no install)". Its endpoint uses the `pmc-webrtc` template (`webrtc=yes`, DTLS-SRTP, ICE) on `transport-ws`; desk phones keep `pmc-endpoint` on TLS |
+| role `phone` | below viewer: own phone and the phone book only. Any user, any role, can be linked to one extension on the Users page |
+| `/api/softphone` | the signed-in user's own extension and its SIP password. Never another's |
+| `/ws` | the gate: refused unless the Origin is this site, the session is live, and the user has a linked phone. Then passed to Asterisk's loopback-only `/ws` (`http.conf`), without the cookie |
+
+To give someone a browser phone: add an extension with model **PMC browser phone**, press **Apply changes**, then
+on **Users** link their sign-in to that extension (role `phone` for staff who should see nothing else). They open
+`/phone`, sign in, allow the microphone once. `asterisk/conf/rtp.conf` must carry `icesupport=yes`.
+
+Proven: `test/sip.test.js` (MD5 against RFC 1321, digest against RFC 2617's worked example, the call flows),
+`test/softphone.test.js` (the role, the routes, and the gate refusing no session, a foreign Origin, an unlinked user
+and the public listener), and in CI `test/ws-call.js` registers and calls 9197 through the gate on the real engine.
+**Not provable without a person:** audio both ways in a real browser. 9196 is an echo test for exactly that.
+
 ## Not built yet
 
 Voicemail-to-email, the directory sync from `payroll.Employee`, click-to-dial from the Employee Portal, and

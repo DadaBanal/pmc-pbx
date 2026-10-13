@@ -3,7 +3,9 @@
 const crypto = require('crypto');
 const { writeFileAtomic, readJsonOr } = require('./fsx');
 
-const ROLES = { viewer: 1, editor: 2, admin: 3 };
+// phone: a member of staff using the browser phone. Signs in, uses their own linked extension and the phone book,
+// and nothing else - no directory, no admin screen. Ranks start at 1 because roleAtLeast treats 0 as unknown.
+const ROLES = { phone: 1, viewer: 2, editor: 3, admin: 4 };
 const MIN_PASSWORD = 10;
 
 function loadUsers(file) {
@@ -27,7 +29,7 @@ function setPassword(data, name, password, role, by) {
   const problem = passwordProblem(password);
   if (problem) throw new Error(problem);
   if (!/^[a-z][a-z0-9._-]{1,31}$/.test(name)) throw new Error('user name: lower-case letters, digits, dot, dash, underscore, 2-32 characters');
-  if (role && !ROLES[role]) throw new Error('role must be viewer, editor or admin');
+  if (role && !ROLES[role]) throw new Error('role must be phone, viewer, editor or admin');
   const salt = crypto.randomBytes(16).toString('hex');
   let u = data.users.find(x => x.name === name);
   if (!u) { u = { name, role: role || 'viewer', createdAt: new Date().toISOString(), createdBy: by || 'cli' }; data.users.push(u); }

@@ -92,6 +92,32 @@ function renderPjsip(dir, cfg, sec) {
   cfg.localNets.forEach(n => L.push('local_net=' + n));
   L.push('allow_reload=no');
   L.push('');
+  // The browser phone. Asterisk's HTTP server (http.conf, loopback only) carries the WebSocket; the app's admin
+  // listener checks the sign-in and passes /ws through. Every other parameter is ignored for a ws transport.
+  L.push('[transport-ws]');
+  L.push('type=transport');
+  L.push('protocol=ws');
+  L.push('bind=127.0.0.1');
+  L.push('');
+  L.push('[pmc-webrtc](!)');
+  L.push('type=endpoint');
+  L.push('context=pmc-internal');
+  L.push('disallow=all');
+  (cfg.webrtcCodecs || ['g722', 'ulaw', 'alaw']).forEach(c => L.push('allow=' + c));
+  L.push('transport=transport-ws');
+  L.push('webrtc=yes');
+  L.push('dtls_auto_generate_cert=yes');
+  L.push('direct_media=no');
+  L.push('dtmf_mode=rfc4733');
+  L.push('language=en');
+  L.push('device_state_busy_at=1');
+  L.push('');
+  L.push('[pmc-aor-webrtc](!)');
+  L.push('type=aor');
+  L.push('max_contacts=5');
+  L.push('remove_existing=yes');
+  L.push('qualify_frequency=60');
+  L.push('');
   L.push('[pmc-endpoint](!)');
   L.push('type=endpoint');
   L.push('context=pmc-internal');
@@ -122,7 +148,8 @@ function renderPjsip(dir, cfg, sec) {
     const cid = '"' + e.name.replace(/"/g, '') + '" <' + e.ext + '>';
     const spec = phones.modelSpec(e.model);
     L.push('; ' + e.ext + ' ' + e.name + (e.dept ? ' (' + e.dept + ')' : '') + (spec ? ' [' + spec.vendor + ' ' + e.model + ']' : ''));
-    L.push('[' + e.ext + '](pmc-endpoint)');
+    const web = !!(spec && spec.webrtc);
+    L.push('[' + e.ext + '](' + (web ? 'pmc-webrtc' : 'pmc-endpoint') + ')');
     L.push('auth=' + e.ext);
     L.push('aors=' + e.ext);
     L.push('callerid=' + cid);
@@ -130,7 +157,7 @@ function renderPjsip(dir, cfg, sec) {
     L.push('[' + e.ext + '](pmc-auth)');
     L.push('username=' + e.ext);
     L.push('password=' + sec.sip[e.ext]);
-    L.push('[' + e.ext + '](pmc-aor)');
+    L.push('[' + e.ext + '](' + (web ? 'pmc-aor-webrtc' : 'pmc-aor') + ')');
     L.push('');
   }
   return L.join('\n');

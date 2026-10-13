@@ -10,7 +10,10 @@
  *
  *   ADMIN   (cfg.admin, LAN only, never forwarded)
  *     the PMC Phones screen (app/public) and its JSON API under /api/
- *     named users with roles viewer < editor < admin, HMAC session cookie, CSRF header on every write
+ *     named users with roles phone < viewer < editor < admin, HMAC session cookie, CSRF header on every write
+ *     /phone        the browser phone, for a user linked to one extension (role phone or above)
+ *     /ws           WebSocket upgrade for that phone: same-origin, signed in, linked to an extension; passed
+ *                   through to Asterisk's loopback-only HTTP server. Nothing else can reach the engine's /ws
  *
  * Node 22, built-ins only. Run: PMC_PBX_CONF=/etc/pmc-pbx node server.js
  */
@@ -19,6 +22,7 @@ const path = require('path');
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
+const net = require('net');
 const { loadConfig } = require('./lib/config');
 const { Store } = require('./lib/store');
 const V = require('./lib/validate');
@@ -150,11 +154,36 @@ function start(cfg, opts) {
   // ------------------------------------------------------------ admin listener
   const findExt = (dir, ext) => { const e = dir.extensions.find(x => x.ext === ext); if (!e) throw new HttpError(404, 'extension ' + ext + ' not found'); return e; };
   const check = dir => { const p = V.validateDirectory(dir, cfg); if (p.length) throw new HttpError(400, p.join('; ')); };
-  const publicUser = u => ({ name: u.name, role: u.role, createdAt: u.createdAt, passwordAt: u.passwordAt, disabled: !!u.disabled });
+  const publicUser = u => ({ name: u.name, role: u.role, ext: u.ext || null, createdAt: u.createdAt, passwordAt: u.passwordAt, disabled: !!u.disabled });
+  // a user's linked extension: four digits that exist in the directory, or empty to unlink
+  const checkExt = ext => {
+    if (ext === '' || ext === null) return null;
+    const v = String(ext).trim();
+    if (!/^\d{4}$/.test(v)) throw new HttpError(400, 'extension must be four digits');
+    findExt(V.normalizeDirectory(store.loadDirectory()), v);
+    return v;
+  };
 
   const routes = [
-    ['GET', /^\/api\/me$/, 'viewer', ctx => ({ name: ctx.user.name, role: ctx.user.role })],
-    ['POST', /^\/api\/logout$/, 'viewer', ctx => { ctx.res.setHeader('Set-Cookie', H.cookie(COOKIE, '', 0, !adminPlain)); return { ok: true }; }],
+    ['GET', /^\/api\/me$/, 'phone', ctx => ({ name: ctx.user.name, role: ctx.user.role, ext: ctx.user.ext || null })],
+    ['POST', /^\/api\/logout$/, 'phone', ctx => { ctx.res.setHeader('Set-Cookie', H.cookie(COOKIE, '', 0, !adminPlain)); return { ok: true }; }],
+    // The browser phone's own credentials: only ever the signed-in user's linked extension, never another
+    ['GET', /^\/api\/softphone$/, 'phone', ctx => {
+      if (!ctx.user.ext) throw new HttpError(404, 'No phone is linked to your sign-in yet. Ask ICT to link your extension.');
+      const dir = V.normalizeDirectory(store.loadDirectory());
+      const e = dir.extensions.find(x => x.ext === ctx.user.ext);
+      if (!e) throw new HttpError(404, 'Your extension ' + ctx.user.ext + ' is not in the phone directory. Ask ICT.');
+      const spec = phones.modelSpec(e.model);
+      if (!spec || !spec.webrtc) throw new HttpError(409, 'Extension ' + e.ext + ' is set up for ' + (spec ? spec.label : e.model) + ', not the browser phone. Ask ICT to change it.');
+      const password = getSecrets().sip[e.ext];
+      if (!password) throw new HttpError(409, 'Extension ' + e.ext + ' is not switched on yet. ICT must press Apply changes.');
+      store.audit({ who: ctx.user.name, action: 'browser phone sign-in', detail: e.ext });
+      return { ext: e.ext, name: e.name, dept: e.dept || '', password, domain: cfg.fqdn, wsPath: '/ws' };
+    }],
+    ['GET', /^\/api\/phonebook$/, 'phone', () => {
+      const dir = V.normalizeDirectory(store.loadDirectory());
+      return { extensions: dir.extensions.map(e => ({ ext: e.ext, name: e.name, dept: e.dept || '' })), departments: dir.departments.map(x => x.name) };
+    }],
     ['GET', /^\/api\/directory$/, 'viewer', () => V.normalizeDirectory(store.loadDirectory())],
     ['GET', /^\/api\/extensions\/next$/, 'editor', ctx => ({ ext: V.nextFreeExt(V.normalizeDirectory(store.loadDirectory()), ctx.url.searchParams.get('dept') || '') })],
     ['POST', /^\/api\/extensions$/, 'editor', async ctx => {
@@ -196,7 +225,7 @@ function start(cfg, opts) {
       const d = phones.driverFor(e.model);
       const spec = phones.modelSpec(e.model);
       const info = { ext: e.ext, mac: e.mac || null, model: e.model, vendor: spec ? spec.vendor : null,
-        url: cfg.provUrl, fqdn: cfg.fqdn, sipPort: cfg.sipPort,
+        url: cfg.provUrl, fqdn: cfg.fqdn, sipPort: cfg.sipPort, adminPort: cfg.admin.port,
         provPassword: e.mac ? (s.prov[e.mac] || null) : null, sipPassword: s.sip[e.ext] || null };
       info.notes = d && d.setupNotes ? d.setupNotes(info) : [];
       // which generated file, if any, this handset fetches
@@ -252,9 +281,11 @@ function start(cfg, opts) {
       const data = auth.loadUsers(cfg.usersFile);
       const name = String(body.name || '').trim().toLowerCase();
       if (data.users.some(u => u.name === name)) throw new HttpError(409, 'user ' + name + ' already exists');
+      const ext = body.ext ? checkExt(body.ext) : null;
       try { auth.setPassword(data, name, body.password, body.role || 'viewer', ctx.user.name); } catch (e) { throw new HttpError(400, e.message); }
+      if (ext) data.users.find(u => u.name === name).ext = ext;
       auth.saveUsers(cfg.usersFile, data);
-      store.audit({ who: ctx.user.name, action: 'add user', detail: name + ' as ' + (body.role || 'viewer') });
+      store.audit({ who: ctx.user.name, action: 'add user', detail: name + ' as ' + (body.role || 'viewer') + (ext ? ', phone ' + ext : '') });
       return { ok: true };
     }],
     ['PUT', /^\/api\/users\/([a-z0-9._-]+)$/, 'admin', async ctx => {
@@ -267,11 +298,12 @@ function start(cfg, opts) {
       if (body.role && body.role !== u.role) { if (self) throw new HttpError(400, 'you cannot change your own role'); if (!auth.ROLES[body.role]) throw new HttpError(400, 'bad role'); u.role = body.role; changes.push('role ' + body.role); }
       if (body.disabled !== undefined && !!body.disabled !== !!u.disabled) { if (self) throw new HttpError(400, 'you cannot disable yourself'); u.disabled = !!body.disabled; changes.push(u.disabled ? 'disabled' : 'enabled'); }
       if (body.password) { try { auth.setPassword(data, u.name, body.password, null, ctx.user.name); } catch (e) { throw new HttpError(400, e.message); } changes.push('password reset'); }
+      if (body.ext !== undefined) { const ext = checkExt(body.ext); if ((ext || null) !== (u.ext || null)) { if (ext) u.ext = ext; else delete u.ext; changes.push(ext ? 'phone ' + ext : 'phone unlinked'); } }
       auth.saveUsers(cfg.usersFile, data);
       store.audit({ who: ctx.user.name, action: 'edit user', detail: u.name + ': ' + (changes.join(', ') || 'no change') });
       return { ok: true };
     }],
-    ['POST', /^\/api\/password$/, 'viewer', async ctx => {
+    ['POST', /^\/api\/password$/, 'phone', async ctx => {
       const body = await ctx.body();
       const data = auth.loadUsers(cfg.usersFile);
       const u = data.users.find(x => x.name === ctx.user.name);
@@ -289,7 +321,7 @@ function start(cfg, opts) {
     const p = url.pathname;
     if (!p.startsWith('/api/')) {
       if (req.method !== 'GET') return H.sendJson(res, 405, { error: 'method not allowed' });
-      return H.serveStatic(res, PUBLIC_DIR, p === '/' ? '/index.html' : p);
+      return H.serveStatic(res, PUBLIC_DIR, p === '/' ? '/index.html' : p === '/phone' ? '/phone.html' : p);
     }
     if (req.method !== 'GET' && req.headers['x-pmc-pbx'] !== '1') return H.sendJson(res, 403, { error: 'missing X-PMC-PBX header' });
 
@@ -332,11 +364,57 @@ function start(cfg, opts) {
     return H.sendJson(res, 404, { error: 'no such API' });
   }
 
+  // ------------------------------------------------------------ the browser phone's WebSocket
+  // Refused unless it comes from this site's own page (Origin), with a live session, for a user linked to an
+  // extension. Then the bytes are passed to Asterisk's loopback HTTP server untouched, minus the cookie.
+  const CRLF = String.fromCharCode(13, 10);
+  function wsProxy(req, socket, head) {
+    const ip = req.socket.remoteAddress || '?';
+    let done = false;
+    const refuse = (status, why) => {
+      if (done) return;
+      done = true;
+      try { socket.end('HTTP/1.1 ' + status + CRLF + 'Connection: close' + CRLF + 'Content-Length: 0' + CRLF + CRLF); } catch (e) { /* gone */ }
+      log('ws ' + ip + ' refused ' + status.split(' ')[0] + ': ' + why);
+    };
+    socket.on('error', () => {});
+    let url;
+    try { url = new URL(req.url || '/', 'https://admin.local'); } catch (e) { return refuse('400 Bad Request', 'bad url'); }
+    if (url.pathname !== '/ws') return refuse('404 Not Found', url.pathname);
+    if (String(req.headers.upgrade || '').toLowerCase() !== 'websocket' || !req.headers['sec-websocket-key']) return refuse('400 Bad Request', 'not a WebSocket upgrade');
+    const origin = req.headers.origin || '';
+    const host = req.headers.host || '';
+    if (!origin || origin !== (adminPlain ? 'http://' : 'https://') + host) return refuse('403 Forbidden', 'origin ' + (origin || 'none') + ' is not this site');
+    const session = auth.readToken(getSecrets().session, H.parseCookies(req)[COOKIE]);
+    const user = session ? auth.loadUsers(cfg.usersFile).users.find(u => u.name === session.name) : null;
+    if (!user || user.disabled) return refuse('401 Unauthorized', 'no session');
+    if (!auth.roleAtLeast(user.role, 'phone') || !user.ext) return refuse('403 Forbidden', user.name + ' has no linked phone');
+    const up = net.connect(cfg.asterisk.wsPort, cfg.asterisk.wsHost);
+    up.on('error', e => { if (!done) refuse('502 Bad Gateway', 'engine: ' + e.message); else socket.destroy(); });
+    up.once('connect', () => {
+      if (done) { up.destroy(); return; }
+      done = true;
+      const lines = ['GET /ws HTTP/1.1', 'Host: ' + cfg.asterisk.wsHost + ':' + cfg.asterisk.wsPort, 'Upgrade: websocket', 'Connection: Upgrade',
+        'Sec-WebSocket-Key: ' + req.headers['sec-websocket-key'], 'Sec-WebSocket-Version: ' + (req.headers['sec-websocket-version'] || '13')];
+      if (req.headers['sec-websocket-protocol']) lines.push('Sec-WebSocket-Protocol: ' + req.headers['sec-websocket-protocol']);
+      up.write(lines.join(CRLF) + CRLF + CRLF);
+      if (head && head.length) up.write(head);
+      up.pipe(socket);
+      socket.pipe(up);
+      up.on('close', () => socket.destroy());
+      socket.on('close', () => up.destroy());
+      log('ws ' + ip + ' ' + user.name + ' phone ' + user.ext + ' connected');
+    });
+  }
+
   const publicServer = https.createServer(tls, provisioning);
   const adminHandler = (req, res) => {
     admin(req, res).catch(err => { log('ERROR ' + (err && err.stack || err)); if (!res.headersSent) H.sendJson(res, 500, { error: 'server error' }); });
   };
   const adminServer = adminPlain ? http.createServer(adminHandler) : https.createServer(tls, adminHandler);
+  adminServer.on('upgrade', wsProxy);
+  // the public listener never upgrades: phones fetch files there, nothing more
+  publicServer.on('upgrade', (req, socket) => { socket.on('error', () => {}); socket.end('HTTP/1.1 404 Not Found' + CRLF + 'Connection: close' + CRLF + 'Content-Length: 0' + CRLF + CRLF); });
   publicServer.listen(cfg.listen.port, cfg.listen.host, () => log('provisioning listener on ' + cfg.listen.host + ':' + publicServer.address().port + ' for ' + cfg.fqdn + ', certificate valid to ' + certInfo.validTo));
   adminServer.listen(cfg.admin.port, cfg.admin.host, () => log('admin screen on ' + (adminPlain ? 'http' : 'https') + '://' + cfg.admin.host + ':' + adminServer.address().port + '/' + (adminPlain ? '  (PREVIEW MODE, plain HTTP on loopback only)' : '')));
 
