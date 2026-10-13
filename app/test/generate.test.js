@@ -50,6 +50,25 @@ test('next free extension respects the department range', () => {
   assert.equal(V.nextFreeExt(d, ''), '1000');
 });
 
+test('the browser phone sends its audio from a LAN address, never loopback (13 Oct 2026: no audio either way)', () => {
+  const d = V.normalizeDirectory(sample);
+  d.extensions.push(V.normalizeExtension({ ext: '3950', name: 'Web', dept: 'ICT', model: 'webphone' }));
+  const secrets = { sip: {}, prov: {} };
+  G.ensureSecrets(d, secrets);
+  const tmpl = p => (/\[pmc-webrtc\]\(!\)\n([\s\S]*?)\n\n/.exec(p) || [])[1] || '';
+  const live = tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host: '10.2.0.10', port: 8443 } }), secrets));
+  assert.match(live, /^media_address=10\.2\.0\.10$/m);
+  assert.match(live, /^bind_rtp_to_media_address=yes$/m);
+  const over = tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host: '10.2.0.10' }, webrtcMediaAddress: '10.2.0.11' }), secrets));
+  assert.match(over, /^media_address=10\.2\.0\.11$/m);
+  // loopback and wildcard are refused: binding there is the fault itself
+  for (const host of ['127.0.0.1', '0.0.0.0', 'localhost', '']) {
+    assert.doesNotMatch(tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host } }), secrets)), /media_address=/, host);
+  }
+  // control: the template was found at all, so "no media_address" above means something
+  assert.match(tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host: '127.0.0.1' } }), secrets)), /^webrtc=yes$/m);
+});
+
 test('secrets are created once and the rendered files carry them', () => {
   const d = V.normalizeDirectory(sample);
   const secrets = { sip: {}, prov: {} };
