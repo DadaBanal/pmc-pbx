@@ -1,8 +1,31 @@
 # The pilot on a NUC (Dada, 8 Oct 2026: "i plan to run this first on a nuc first as well")
 
-The pilot engine runs on one of the hospital's mini-PCs before the DND-HOST1 VM is built. The record calls
-them NUCs; the measured unit is an **Origimagic C8, Ryzen 5 5400U, 16 GB RAM, Kingston 512 GB SSD, Realtek
-RTL8125 2.5 GbE** (record, Sep 2026 workstation build). Far more than a PBX for 100 phones needs.
+The pilot engine runs on one of the hospital's mini-PCs before the DND-HOST1 VM is built.
+
+**The build PC is `PMCWKS-181566`** (Dada, 13 Oct 2026: "this is the pc to use for the build"), a **BOSGAME
+Ecolite Series** mini-PC. What is measured and what is carried over from its twin:
+
+| | | |
+|---|---|---|
+| Model | BOSGAME Ecolite Series | MEASURED, Windows Settings on the unit |
+| Today | domain-joined Windows 11 workstation, DHCP 10.2.3.186, MAC `84:47:09:82:95:95`, RDP answering | MEASURED 13 Oct from DND-SQL01 |
+| CPU, RAM | Ryzen 3 5300U, about 13 GB visible to the OS | INFERRED from the identical model `PMCWKS-180441`, measured 2 Sep |
+| NICs | **two** Realtek RTL8125 2.5 GbE (`DEV_8125 REV_05`), plus Realtek 8822CE Wi-Fi | INFERRED from the same twin; this unit's MAC is in the same `84:47:09:82:95:xx` block |
+
+Far more than a PBX for 100 phones needs. This unit's own CPU, RAM and disk were not readable remotely - the
+workstation firewall passes RPC 135 but not the dynamic ports behind it - so read them off the BIOS screen at
+step 2.
+
+## Before the stick goes in
+
+- **This erases a working Windows 11 workstation.** Whoever uses it moves first. Afterwards disable the
+  `PMCWKS-181566` computer object in AD, or it sits there stale.
+- **Address: `10.2.0.10/22`, static.** The UDM's DHCP pool on the Default network is `10.2.0.16 - 10.2.3.244`
+  (MEASURED 13 Oct). 10.2.0.10 is below it, carries no UniFi reservation, and nothing answered for it from the
+  gateway. The address this guide used to name, 10.2.2.200, is **inside** the pool and is leased today to
+  PMC-NASPMC. A static address inside the pool is exactly the fault the Matrix PBX has right now at 10.2.3.10.
+- **Two Ethernet ports.** Plug in **one** cable, so the installer's automatic interface choice cannot pick a
+  dead port.
 
 ## The one hardware fact that matters
 
@@ -25,7 +48,7 @@ if it does not, that is the first thing to report, not to work around.
    SSH server and standard utilities only), or with `vm/preseed.cfg` served from any web server.
 4. **First boot**, from DND-SQL01:
    ```
-   ssh pmcadmin@<address>
+   ssh pmcadmin@10.2.0.10
    sudo apt-get update && sudo apt-get -y dist-upgrade
    sudo apt-get -y install git curl ca-certificates gnupg chrony nftables
    sudo git clone https://github.com/DadaBanal/pmc-pbx.git /opt/pmc-pbx
@@ -36,7 +59,7 @@ if it does not, that is the first thing to report, not to work around.
    will be quicker). Gate: `asterisk -V` prints 22.11.0.
 6. **Application:** the "On the VM" block in `app/README.md`, unchanged. The admin screen then answers on the
    NUC's LAN address, port 8443.
-7. **First phones:** two T31P on the same switch; phase 3 of the design.
+7. **First phones:** two of the four T30P on the same switch; phase 3 of the design.
 
 ## What moves to the VM later
 

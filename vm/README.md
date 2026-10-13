@@ -25,7 +25,7 @@ from somewhere reachable (the app's HTTPS listener can serve it later; for the f
 |---|---|
 | Language, location, locale | English, Philippines, en_US.UTF-8 |
 | Hostname, domain | `pmc-pbx01`, `pmcne.ph` |
-| Network | static: address `10.2.2.200/22` (confirm free first), gateway `10.2.0.1`, DNS DND-AD01 |
+| Network | static: address `10.2.0.10/22`, gateway `10.2.0.1`, DNS DND-AD01 `10.10.0.201`. Below the DHCP pool `10.2.0.16 - 10.2.3.244`; measured unanswered and unreserved 13 Oct 2026 |
 | Root login | disabled; create user `pmcadmin` with a long password kept outside this repo |
 | Partitioning | guided, whole disk, LVM, all files in one partition |
 | Software | **SSH server** and **standard system utilities** only. No desktop |
@@ -34,7 +34,7 @@ from somewhere reachable (the app's HTTPS listener can serve it later; for the f
 After first boot, from DND-SQL01:
 
 ```
-ssh pmcadmin@10.2.2.200
+ssh pmcadmin@10.2.0.10
 sudo apt-get update && sudo apt-get -y dist-upgrade
 sudo apt-get -y install git curl ca-certificates gnupg chrony nftables
 ```
