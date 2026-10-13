@@ -2,11 +2,13 @@
 'use strict';
 /*
  * pmc-pbx command line for the service host.
- *   node admin.js adduser <name> <role>     role: viewer | editor | admin. Password from PMC_PBX_PASSWORD or prompt.
+ *   node admin.js adduser <name> <role>     role: phone | viewer | editor | admin. Password from PMC_PBX_PASSWORD or prompt.
  *   node admin.js passwd  <name>            reset a password
  *   node admin.js users                     list users
  *   node admin.js check                     validate directory.json
  *   node admin.js apply                     generate config and reload the engine, as the Apply button does
+ *   node admin.js addext <dept> <model> <name...>   add an extension, next free number in that department
+ *   node admin.js link <user> <ext|none>    link a sign-in to one extension (the browser phone), or unlink
  * Config dir: PMC_PBX_CONF (default /etc/pmc-pbx).
  */
 const readline = require('readline');
@@ -18,7 +20,7 @@ const { applyChanges } = require('./server');
 
 const cfg = loadConfig(process.env.PMC_PBX_CONF || '/etc/pmc-pbx');
 const store = new Store(cfg);
-const [cmd, a1, a2] = process.argv.slice(2);
+const [cmd, a1, a2, ...rest] = process.argv.slice(2);
 
 async function password(prompt) {
   if (process.env.PMC_PBX_PASSWORD) return process.env.PMC_PBX_PASSWORD;
@@ -49,7 +51,7 @@ async function password(prompt) {
       break;
     }
     case 'users': {
-      for (const u of auth.loadUsers(cfg.usersFile).users) console.log(u.name + '  ' + u.role + (u.disabled ? '  disabled' : '') + '  created ' + u.createdAt);
+      for (const u of auth.loadUsers(cfg.usersFile).users) console.log(u.name + '  ' + u.role + (u.ext ? '  phone ' + u.ext : '') + (u.disabled ? '  disabled' : '') + '  created ' + u.createdAt);
       break;
     }
     case 'check': {
@@ -58,6 +60,37 @@ async function password(prompt) {
       console.log('directory version ' + dir.version + ': ' + dir.extensions.length + ' extensions, ' + dir.extensions.filter(e => e.mac).length + ' phones, ' + dir.departments.length + ' departments');
       if (problems.length) { problems.forEach(p => console.log('  - ' + p)); process.exit(1); }
       console.log('ok');
+      break;
+    }
+    case 'addext': {
+      const name = rest.join(' ').trim();
+      if (!a1 || !a2 || !name) { console.error('usage: addext <dept> <model> <name...>'); process.exit(2); }
+      const dir = V.normalizeDirectory(store.loadDirectory());
+      const e = V.normalizeExtension({ name, dept: a1, model: a2, voicemail: true });
+      e.ext = V.nextFreeExt(dir, e.dept) || '';
+      if (!e.ext) { console.error('no free extension in department ' + a1); process.exit(1); }
+      dir.extensions.push(e);
+      const problems = V.validateDirectory(dir, cfg);
+      if (problems.length) { console.error('STOP: ' + problems.join('; ')); process.exit(1); }
+      const version = store.saveDirectory(dir, 'cli', 'add extension', e.ext + ' ' + e.name + ' (' + e.model + ')');
+      console.log('extension ' + e.ext + ' "' + e.name + '" (' + e.model + ', ' + e.dept + ') added, directory version ' + version + '. Run apply.');
+      break;
+    }
+    case 'link': {
+      if (!a1 || !a2) { console.error('usage: link <user> <ext|none>'); process.exit(2); }
+      const data = auth.loadUsers(cfg.usersFile);
+      const u = data.users.find(x => x.name === a1);
+      if (!u) { console.error('no such user'); process.exit(1); }
+      if (a2 === 'none') { delete u.ext; }
+      else {
+        if (!/^\d{4}$/.test(a2)) { console.error('extension must be four digits'); process.exit(2); }
+        const dir = V.normalizeDirectory(store.loadDirectory());
+        if (!dir.extensions.some(x => x.ext === a2)) { console.error('extension ' + a2 + ' is not in the directory'); process.exit(1); }
+        u.ext = a2;
+      }
+      auth.saveUsers(cfg.usersFile, data);
+      store.audit({ who: 'cli', action: 'edit user', detail: a1 + ': ' + (a2 === 'none' ? 'phone unlinked' : 'phone ' + a2) });
+      console.log(a1 + (a2 === 'none' ? ' unlinked' : ' linked to ' + a2));
       break;
     }
     case 'apply': {
@@ -69,7 +102,7 @@ async function password(prompt) {
       break;
     }
     default:
-      console.error('commands: adduser <name> <role> | passwd <name> | users | check | apply');
+      console.error('commands: adduser <name> <role> | passwd <name> | users | check | apply | addext <dept> <model> <name...> | link <user> <ext|none>');
       process.exit(2);
   }
 })().catch(err => { console.error(err.message); process.exit(1); });
