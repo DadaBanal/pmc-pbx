@@ -110,7 +110,7 @@ const media = seen => ({ async create() { return {
   await until(() => call.state === 'active' || call.state === 'ended', 15000, 'the call to 9197').catch(e => fail(e.message));
   if (call.state !== 'active') fail('call to 9197 ended: ' + call.reason);
   const sdp = seen.answer || '';
-  for (const [re, what] of [[/a=fingerprint:sha-256 /, 'a DTLS fingerprint'], [/a=ice-ufrag:/, 'ICE credentials'], [/UDP\/TLS\/RTP\/SAVPF/, 'the WebRTC media profile'], [/a=rtcp-mux/, 'rtcp-mux']]) {
+  for (const [re, what] of [[/a=fingerprint:sha-256 /i, 'a DTLS fingerprint'], [/a=ice-ufrag:/, 'ICE credentials'], [/UDP\/TLS\/RTP\/SAVPF/, 'the WebRTC media profile'], [/a=rtcp-mux/, 'rtcp-mux']]) {
     if (!re.test(sdp)) fail('the engine\'s answer has no ' + what + ':\n' + sdp);
   }
   ok('9197 answered; the engine\'s SDP carries a DTLS fingerprint, ICE, SAVPF and rtcp-mux');
