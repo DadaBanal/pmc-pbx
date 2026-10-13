@@ -31,7 +31,7 @@ jobs:
         # is a file CI never runs (phones.test.js was missed on 9 Oct 2026 and a real break reached main)
         run: |
           ls app/test/*.test.js
-          node --test app/test/generate.test.js app/test/auth.test.js app/test/api.test.js app/test/phones.test.js app/test/sip.test.js app/test/softphone.test.js app/test/pwa.test.js
+          node --test app/test/generate.test.js app/test/auth.test.js app/test/api.test.js app/test/phones.test.js app/test/sip.test.js app/test/softphone.test.js app/test/pwa.test.js app/test/ad.test.js
           # no test file may be left out of the line above
           want=$(ls app/test/*.test.js | wc -l)
           got=$(grep -o 'app/test/[a-z]*\.test\.js' .github/workflows/ci.yml | sort -u | wc -l)

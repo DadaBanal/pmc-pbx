@@ -14,6 +14,12 @@
  *     /phone        the browser phone, for a user linked to one extension (role phone or above)
  *     /ws           WebSocket upgrade for that phone: same-origin, signed in, linked to an extension; passed
  *                   through to Asterisk's loopback-only HTTP server. Nothing else can reach the engine's /ws
+ *   phone site      `phoneSite` (optional, e.g. 10.2.0.11:443 as https://phone.pmcne.ph): the browser phone only,
+ *                   no port in the address. Same handler, but only the phone's files and the phone's API answer
+ *
+ * Phone users (`ad` in config.json): anyone who is not an admin-screen account signs in with their Active Directory
+ * name and password, checked by binding to the domain controller; they must be in one of `ad.groups` (nested
+ * membership counts). They are kept in their own list, phone-users.json, and get a browser phone on first sign-in.
  *
  * Node 22, built-ins only. Run: PMC_PBX_CONF=/etc/pmc-pbx node server.js
  */
@@ -32,6 +38,8 @@ const auth = require('./lib/auth');
 const H = require('./lib/httpx');
 const phones = require('./lib/phones');
 const { readJsonOr } = require('./lib/fsx');
+const ldap = require('./lib/ldap');
+const PU = require('./lib/phoneusers');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const COOKIE = 'pmcpbx';
@@ -93,6 +101,25 @@ function start(cfg, opts) {
   const provBans = new H.BanList(cfg.banAfter, cfg.banWindowSec, cfg.banSec);
   const loginBans = new H.BanList(cfg.banAfter, cfg.banWindowSec, cfg.banSec);
   const startedAt = Date.now();
+
+  // Who a session belongs to: an admin-screen account, or a phone user from Active Directory (token name "ad:<sam>").
+  // Both are re-read on every request, so switching someone off takes effect at once.
+  function sessionUser(req) {
+    const session = auth.readToken(getSecrets().session, H.parseCookies(req)[COOKIE]);
+    if (!session) return null;
+    if (session.name.startsWith('ad:')) {
+      if (!cfg.ad) return null;
+      const u = PU.find(PU.load(cfg), session.name.slice(3));
+      return u && !u.disabled && u.ext ? { name: u.sam, display: u.name, role: 'phone', ext: u.ext, ad: true } : null;
+    }
+    const u = auth.loadUsers(cfg.usersFile).users.find(x => x.name === session.name);
+    return u && !u.disabled ? u : null;
+  }
+  // what the phone site serves: the phone page and what it loads, nothing of the admin screen
+  const PHONE_SITE_FILES = /^\/(phone|phone\.html|phone\.js|sip\.js|style\.css|manifest\.webmanifest|sw\.js|icons\/[a-z0-9-]+\.png)$/;
+  const phoneFromOk = ip => !cfg.phoneNetworks || H.inNetworks(ip, cfg.phoneNetworks);
+  const NOT_HERE = 'PMC Phone works only on the hospital\'s wired network.';
+  const AD_SAY = new Set(['account disabled', 'account locked out', 'password expired', 'password must be changed', 'account expired', 'not allowed at this time', 'not allowed from this computer']);
 
   const certDaysLeft = () => Math.floor((new Date(certInfo.validTo).getTime() - Date.now()) / 86400000);
 
@@ -165,7 +192,7 @@ function start(cfg, opts) {
   };
 
   const routes = [
-    ['GET', /^\/api\/me$/, 'phone', ctx => ({ name: ctx.user.name, role: ctx.user.role, ext: ctx.user.ext || null })],
+    ['GET', /^\/api\/me$/, 'phone', ctx => ({ name: ctx.user.name, display: ctx.user.display || ctx.user.name, role: ctx.user.role, ext: ctx.user.ext || null, ad: !!ctx.user.ad })],
     ['POST', /^\/api\/logout$/, 'phone', ctx => { ctx.res.setHeader('Set-Cookie', H.cookie(COOKIE, '', 0, !adminPlain)); return { ok: true }; }],
     // The browser phone's own credentials: only ever the signed-in user's linked extension, never another
     ['GET', /^\/api\/softphone$/, 'phone', ctx => {
@@ -274,6 +301,16 @@ function start(cfg, opts) {
         certDaysLeft: certDaysLeft(), uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000)
       };
     }],
+    // the phone users list (Active Directory sign-ins), separate from the admin screen's own accounts
+    ['GET', /^\/api\/phone-users$/, 'admin', () => ({ ad: cfg.ad ? { groups: cfg.ad.groups, dept: cfg.ad.dept, url: cfg.ad.url } : null, users: PU.load(cfg).users })],
+    ['PUT', /^\/api\/phone-users\/([a-z0-9._-]+)$/, 'admin', async ctx => {
+      const body = await ctx.body();
+      if (body.disabled === undefined) throw new HttpError(400, 'nothing to change');
+      const u = PU.update(cfg, ctx.params[0], { disabled: !!body.disabled });
+      if (!u) throw new HttpError(404, 'phone user not found');
+      store.audit({ who: ctx.user.name, action: 'edit phone user', detail: u.sam + ': ' + (u.disabled ? 'switched off' : 'switched on') });
+      return { ok: true };
+    }],
     ['GET', /^\/api\/audit$/, 'admin', ctx => store.readAudit(Math.min(1000, Number(ctx.url.searchParams.get('limit')) || 200))],
     ['GET', /^\/api\/users$/, 'admin', () => auth.loadUsers(cfg.usersFile).users.map(publicUser)],
     ['POST', /^\/api\/users$/, 'admin', async ctx => {
@@ -305,6 +342,7 @@ function start(cfg, opts) {
     }],
     ['POST', /^\/api\/password$/, 'phone', async ctx => {
       const body = await ctx.body();
+      if (ctx.user.ad) throw new HttpError(400, 'Your password is your Windows password. Change it in Windows (Ctrl+Alt+Del).');
       const data = auth.loadUsers(cfg.usersFile);
       const u = data.users.find(x => x.name === ctx.user.name);
       if (!u || !auth.verifyPassword(u, String(body.current || ''))) throw new HttpError(401, 'current password is wrong');
@@ -315,12 +353,21 @@ function start(cfg, opts) {
     }]
   ];
 
-  async function admin(req, res) {
+  async function admin(req, res, site) {
     const ip = req.socket.remoteAddress || '?';
     const url = new URL(req.url || '/', 'https://admin.local');
     const p = url.pathname;
+    // the browser phone answers only the networks it is enabled on; the admin screen is not affected
+    if (!phoneFromOk(ip) && (site === 'phone' || p === '/phone' || p === '/phone.html' || p === '/api/softphone')) {
+      log('phone ' + ip + ' refused: not on an enabled network (' + p + ')');
+      return p.startsWith('/api/') ? H.sendJson(res, 403, { error: NOT_HERE }) : H.sendText(res, 403, 'text/plain; charset=utf-8', NOT_HERE);
+    }
     if (!p.startsWith('/api/')) {
       if (req.method !== 'GET') return H.sendJson(res, 405, { error: 'method not allowed' });
+      if (site === 'phone') {
+        if (p === '/') { res.writeHead(302, { Location: '/phone' }); return res.end(); }
+        if (!PHONE_SITE_FILES.test(p)) return H.sendText(res, 404, 'text/plain', 'not found');
+      }
       return H.serveStatic(res, PUBLIC_DIR, p === '/' ? '/index.html' : p === '/phone' ? '/phone.html' : p);
     }
     if (req.method !== 'GET' && req.headers['x-pmc-pbx'] !== '1') return H.sendJson(res, 403, { error: 'missing X-PMC-PBX header' });
@@ -330,6 +377,10 @@ function start(cfg, opts) {
       let body; try { body = await H.readJson(req); } catch (e) { return H.sendJson(res, 400, { error: e.message }); }
       const name = String(body.name || '').trim().toLowerCase();
       const user = auth.loadUsers(cfg.usersFile).users.find(u => u.name === name);
+      if (!user && cfg.ad) {
+        if (!phoneFromOk(ip)) { log('phone ' + ip + ' AD sign-in refused: not on an enabled network'); return H.sendJson(res, 403, { error: NOT_HERE }); }
+        return adLogin(req, res, ip, name, String(body.password || ''));
+      }
       if (!user || user.disabled || !auth.verifyPassword(user, String(body.password || ''))) {
         loginBans.fail(ip); log('admin ' + ip + ' login FAILED for ' + (name || '?'));
         return H.sendJson(res, 401, { error: 'wrong name or password' });
@@ -341,13 +392,13 @@ function start(cfg, opts) {
       return H.sendJson(res, 200, { name: user.name, role: user.role });
     }
 
-    const session = auth.readToken(getSecrets().session, H.parseCookies(req)[COOKIE]);
-    const user = session ? auth.loadUsers(cfg.usersFile).users.find(u => u.name === session.name) : null;
-    if (!user || user.disabled) return H.sendJson(res, 401, { error: 'sign in' });
+    const user = sessionUser(req);
+    if (!user) return H.sendJson(res, 401, { error: 'sign in' });
 
     for (const [method, re, minRole, handler] of routes) {
       const m = re.exec(p);
       if (!m || method !== req.method) continue;
+      if (site === 'phone' && minRole !== 'phone') continue; // the phone site answers the phone's own API only
       if (!auth.roleAtLeast(user.role, minRole)) return H.sendJson(res, 403, { error: 'your role (' + user.role + ') cannot do this' });
       const ctx = { req, res, user, url, params: m.slice(1), body: () => H.readJson(req) };
       try {
@@ -362,6 +413,32 @@ function start(cfg, opts) {
       }
     }
     return H.sendJson(res, 404, { error: 'no such API' });
+  }
+
+  // A domain account: password checked by binding to the domain controller, then group membership. On the first
+  // sign-in the person is added to the phone users list with a browser phone, and the engine is reloaded.
+  async function adLogin(req, res, ip, name, password) {
+    const r = await ldap.checkPerson(cfg.ad, name, password);
+    if (!r.ok) {
+      if (r.unavailable) { log('phone ' + ip + ' AD sign-in for ' + (name || '?') + ' UNAVAILABLE: ' + r.reason); return H.sendJson(res, 503, { error: 'The hospital directory did not answer. Try again in a minute.' }); }
+      loginBans.fail(ip); log('phone ' + ip + ' AD sign-in FAILED for ' + (name || '?') + ': ' + r.reason);
+      if (/^not in /.test(r.reason)) return H.sendJson(res, 403, { error: 'Your Windows account is not on the phone list. Ask PMO ICT.' });
+      if (AD_SAY.has(r.reason)) return H.sendJson(res, 401, { error: 'Windows says: ' + r.reason + '.' });
+      return H.sendJson(res, 401, { error: 'wrong name or password' });
+    }
+    loginBans.clear(ip);
+    let pu = PU.find(PU.load(cfg), r.sam);
+    if (pu && pu.disabled) { log('phone ' + ip + ' AD sign-in refused for ' + r.sam + ': switched off'); return H.sendJson(res, 403, { error: 'PMO ICT has switched off your phone. Ask them.' }); }
+    if (!pu) {
+      try { pu = PU.add(cfg, store, r.sam, r.name, r.group, 'ad:' + r.sam).user; } catch (e) { log('phone user ' + r.sam + ' NOT added: ' + e.message); return H.sendJson(res, 409, { error: 'Could not give you a phone: ' + e.message + '. Ask PMO ICT.' }); }
+      const ap = await applyChanges(cfg, store, 'ad:' + r.sam);
+      log('phone user ' + r.sam + ' added as ' + pu.ext + '; apply ' + (ap.ok ? 'ok' : 'FAILED: ' + (ap.error || (ap.problems || []).join('; '))));
+    }
+    PU.update(cfg, r.sam, { lastSignIn: new Date().toISOString() });
+    res.setHeader('Set-Cookie', H.cookie(COOKIE, auth.makeToken(getSecrets().session, 'ad:' + r.sam, cfg.admin.sessionHours), cfg.admin.sessionHours * 3600, !adminPlain));
+    store.audit({ who: 'ad:' + r.sam, action: 'sign in', detail: 'phone ' + pu.ext + ' from ' + ip });
+    log('phone ' + ip + ' AD sign-in ' + r.sam + ' phone ' + pu.ext);
+    return H.sendJson(res, 200, { name: r.sam, display: pu.name, role: 'phone', ext: pu.ext });
   }
 
   // ------------------------------------------------------------ the browser phone's WebSocket
@@ -381,13 +458,13 @@ function start(cfg, opts) {
     let url;
     try { url = new URL(req.url || '/', 'https://admin.local'); } catch (e) { return refuse('400 Bad Request', 'bad url'); }
     if (url.pathname !== '/ws') return refuse('404 Not Found', url.pathname);
+    if (!phoneFromOk(ip)) return refuse('403 Forbidden', 'not on an enabled network');
     if (String(req.headers.upgrade || '').toLowerCase() !== 'websocket' || !req.headers['sec-websocket-key']) return refuse('400 Bad Request', 'not a WebSocket upgrade');
     const origin = req.headers.origin || '';
     const host = req.headers.host || '';
     if (!origin || origin !== (adminPlain ? 'http://' : 'https://') + host) return refuse('403 Forbidden', 'origin ' + (origin || 'none') + ' is not this site');
-    const session = auth.readToken(getSecrets().session, H.parseCookies(req)[COOKIE]);
-    const user = session ? auth.loadUsers(cfg.usersFile).users.find(u => u.name === session.name) : null;
-    if (!user || user.disabled) return refuse('401 Unauthorized', 'no session');
+    const user = sessionUser(req);
+    if (!user) return refuse('401 Unauthorized', 'no session');
     if (!auth.roleAtLeast(user.role, 'phone') || !user.ext) return refuse('403 Forbidden', user.name + ' has no linked phone');
     const up = net.connect(cfg.asterisk.wsPort, cfg.asterisk.wsHost);
     up.on('error', e => { if (!done) refuse('502 Bad Gateway', 'engine: ' + e.message); else socket.destroy(); });
@@ -416,12 +493,21 @@ function start(cfg, opts) {
   // the public listener never upgrades: phones fetch files there, nothing more
   publicServer.on('upgrade', (req, socket) => { socket.on('error', () => {}); socket.end('HTTP/1.1 404 Not Found' + CRLF + 'Connection: close' + CRLF + 'Content-Length: 0' + CRLF + CRLF); });
   publicServer.listen(cfg.listen.port, cfg.listen.host, () => log('provisioning listener on ' + cfg.listen.host + ':' + publicServer.address().port + ' for ' + cfg.fqdn + ', certificate valid to ' + certInfo.validTo));
+  // the phone site: the browser phone at an address with no port in it (phone.pmcne.ph on its own LAN address)
+  let phoneServer = null;
+  if (cfg.phoneSite) {
+    phoneServer = https.createServer(tls, (req, res) => {
+      admin(req, res, 'phone').catch(err => { log('ERROR ' + (err && err.stack || err)); if (!res.headersSent) H.sendJson(res, 500, { error: 'server error' }); });
+    });
+    phoneServer.on('upgrade', wsProxy);
+    phoneServer.listen(cfg.phoneSite.port, cfg.phoneSite.host, () => log('phone site on ' + cfg.phoneSite.host + ':' + phoneServer.address().port + (cfg.phoneSite.name ? ' as https://' + cfg.phoneSite.name + '/' : '')));
+  }
   adminServer.listen(cfg.admin.port, cfg.admin.host, () => log('admin screen on ' + (adminPlain ? 'http' : 'https') + '://' + cfg.admin.host + ':' + adminServer.address().port + '/' + (adminPlain ? '  (PREVIEW MODE, plain HTTP on loopback only)' : '')));
 
   return {
-    publicServer, adminServer, store,
+    publicServer, adminServer, phoneServer, store,
     close() {
-      for (const s of [publicServer, adminServer]) { if (s.closeAllConnections) s.closeAllConnections(); s.close(); }
+      for (const s of [publicServer, adminServer, phoneServer].filter(Boolean)) { if (s.closeAllConnections) s.closeAllConnections(); s.close(); }
     }
   };
 }

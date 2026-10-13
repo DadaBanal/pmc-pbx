@@ -133,17 +133,49 @@ only in Azure Virtual Desktop, Windows 365 and Dev Box.
 | `public/icons/` | rendered from an SVG with headless Edge; white handset on the accent gradient |
 | `test/pwa.test.js` | the files are well formed and the right sizes, the page links them, the worker scope matches, the server gives them out **before sign-in** (Edge's force-install fetches them signed out), and the worker passes a live page through untouched |
 
-**Every PC, pushed by Group Policy** (Microsoft Edge ADMX, Computer or User Configuration > Administrative
-Templates > Microsoft Edge). Both policies are Windows-only; neither works on Android or iOS.
+**Getting it:** open `https://phone.pmcne.ph` in Edge on a PC on the Default network, then *Install*. No Group Policy:
+Dada, 13 Oct 2026, *"why does it need to be gpo"*. (If it is ever wanted, Edge's `WebAppInstallForceList` installs it
+silently and `WebAppSettings` `run_on_os_login` opens it at sign-in; both Windows only.)
 
-| Policy | Value |
+### Where it works: the Default network only
+
+Dada, 13 Oct 2026: *"only enable it on the default network"*. `phoneNetworks` in config.json (`["10.2.0.0/22"]` on
+PMC-PBX01) is the list. From anywhere else the phone site, `/phone`, phone sign-in, `/api/softphone` and `/ws` answer
+403 "PMC Phone works only on the hospital's wired network." The admin screen is not affected. So the two Wi-Fi
+networks (10.69.68.0/22, 10.17.80.0/22) and mobile phones on them are out, by decision, not by accident.
+
+### The phone site: no port in the address
+
+Dada: *"why still the port"*. `phoneSite` `{ "host": "10.2.0.11", "port": 443, "name": "phone.pmcne.ph" }` is a third
+listener on its own LAN address, so the address is `https://phone.pmcne.ph`. It serves the phone's files and the phone's
+API only: `/` goes to `/phone`, the admin screen's files and admin API answer 404 there, even for an admin. The
+internet-facing listener stays alone on 10.2.0.10:443. The wildcard certificate covers the name.
+
+### Phone users: Windows sign-in, their own list
+
+Dada: *"there should be a separate user list that is link to the ad add pmo team on it"*. Anyone who is not an
+admin-screen account signs in with their Windows name and password (`jdoe`, `PMCNE\jdoe` or `jdoe@pmcne.ph`).
+
+| Step | What happens |
 |---|---|
-| Configure list of force-installed Web Apps (`WebAppInstallForceList`) | `[{"url":"https://pbx.pmcne.ph:8443/phone","default_launch_container":"window","create_desktop_shortcut":true}]` |
-| Web App management settings (`WebAppSettings`, Edge 120+) | `[{"manifest_id":"https://pbx.pmcne.ph:8443/phone","run_on_os_login":"run_windowed"}]`: opens at Windows sign-in, so it is there to ring |
+| password | a simple bind to the domain controller as that person, over LDAPS, on a **pinned** certificate: DND-AD01's is self-signed (`CN=DND-AD01`, to 2031), so the SHA-256 fingerprint in `ad.pin` is the whole trust decision. An empty password is refused before anything is sent (AD treats it as an anonymous bind and says yes) |
+| group | `ad.groups` (e.g. `["PMO Team"]`), nested membership included (`LDAP_MATCHING_RULE_IN_CHAIN`), checked at **every** sign-in |
+| the list | `phone-users.json`, separate from the admin accounts. First sign-in adds the person with a browser phone in `ad.dept` and reloads the engine |
+| switching off | Users page, *Phone users (Windows sign-in)*: **Switch off** ends their session and their phone connection at once, even while they stay in the group |
 
-**Phones:** open `https://pbx.pmcne.ph:8443/phone` on the hospital Wi-Fi, then *Install app* (Android Chrome or
-Edge) or *Share > Add to Home Screen* (iPhone Safari). A web app rings only while it is open: there is no SIP push to
-wake it, so a closed app on a phone misses the call. Sign-in lasts `admin.sessionHours` (12), one sign-in per shift.
+`node admin.js phoneuser <windows-name> <display name...>` puts someone on the list ahead of their first sign-in;
+`node admin.js phoneusers` lists it. Their password is never stored here: the domain controller checks it each time.
+
+```json
+"ad": { "url": "ldaps://10.10.0.201:636", "servername": "DND-AD01.pmcne.ph",
+        "pin": "B8:33:06:10:D0:47:96:C1:DE:AB:C4:5C:35:2E:91:C3:7F:4B:79:2F:13:E0:9C:FC:02:D9:F7:FA:54:E8:CC:C2",
+        "baseDN": "DC=pmcne,DC=ph", "upnSuffix": "@pmcne.ph", "groups": ["PMO Team"], "dept": "ICT" }
+```
+
+Proven by `test/ad.test.js` against `test/fake-dc.js`, a stand-in directory on a pinned certificate: the password
+by bind, the group, locked and unknown accounts, an empty password and a wrong certificate that never reach it, the
+list, first-sign-in extension, switching off, the phone site's limits and the network rule. Each protection was
+broken on purpose once and a test failed.
 
 ## Not built yet
 

@@ -364,6 +364,22 @@
     $$('[data-reset]').forEach(b => b.onclick = async () => { const p = prompt('New temporary password for ' + b.dataset.reset + ' (10+ characters)'); if (!p) return; try { await api('PUT', '/api/users/' + b.dataset.reset, { password: p }); toast('Password reset', 'ok'); } catch (e) { toast(e.message, 'bad'); } });
     $$('[data-toggle]').forEach(b => b.onclick = async () => { try { await api('PUT', '/api/users/' + b.dataset.toggle, { disabled: b.dataset.dis === '1' }); renderUsers(); } catch (e) { toast(e.message, 'bad'); } });
     $('#uf').onsubmit = async ev => { ev.preventDefault(); const f = ev.target; try { await api('POST', '/api/users', { name: f.name.value, role: f.role.value, password: f.password.value, ext: f.ext.value.trim() }); toast('User added', 'ok'); renderUsers(); } catch (e) { toast(e.message, 'bad'); } };
+    // phone users: Windows sign-in, their own list, separate from the accounts above
+    let pu = null;
+    try { pu = await api('GET', '/api/phone-users'); } catch (e) { pu = null; }
+    if (!pu) return;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'phone-users';
+    card.innerHTML = '<h3>' + icon('phone') + 'Phone users (Windows sign-in)</h3><p class="sub">' + (pu.ad
+      ? 'Anyone in ' + esc(pu.ad.groups.join(' or ')) + ' signs in to the phone with their Windows name and password, and gets a browser phone in ' + esc(pu.ad.dept) + ' the first time. Membership is checked at every sign-in. Switch someone off here to stop them while they stay in the group.'
+      : 'Windows sign-in is not set up on this server.') + '</p>' +
+      (pu.users.length ? '<table class="grid"><thead><tr><th>Windows name</th><th>Name</th><th>Phone</th><th>Added</th><th>Last sign-in</th><th></th></tr></thead><tbody>' +
+        pu.users.map(u => '<tr' + (u.disabled ? ' style="opacity:.6"' : '') + '><td class="mono">' + esc(u.sam) + (u.disabled ? ' <span class="pill">off</span>' : '') + '</td><td>' + esc(u.name) + '</td><td class="mono">' + esc(u.ext) + '</td><td class="muted">' + esc((u.addedAt || '').slice(0, 10)) + '</td><td class="muted">' + esc(u.lastSignIn ? u.lastSignIn.replace('T', ' ').slice(0, 16) : 'never') + '</td>' +
+          '<td class="right"><button class="ghost small" data-pu="' + esc(u.sam) + '" data-dis="' + (u.disabled ? '0' : '1') + '">' + (u.disabled ? 'Switch on' : 'Switch off') + '</button></td></tr>').join('') + '</tbody></table>'
+        : '<div class="empty">Nobody yet. People appear here the first time they sign in.</div>');
+    $('#main').appendChild(card);
+    $$('[data-pu]').forEach(b => b.onclick = async () => { try { await api('PUT', '/api/phone-users/' + b.dataset.pu, { disabled: b.dataset.dis === '1' }); toast(b.dataset.dis === '1' ? 'Switched off' : 'Switched on', 'ok'); renderUsers(); } catch (e) { toast(e.message, 'bad'); } });
   }
 
   function renderPassword() {

@@ -60,6 +60,22 @@ function serveStatic(res, rootDir, urlPath) {
   fs.createReadStream(file).pipe(res);
 }
 
+// Is an address inside one of the networks ("10.2.0.0/22")? IPv4-mapped IPv6 ("::ffff:10.2.0.5") counts as IPv4.
+function inNetworks(ip, cidrs) {
+  const v4 = String(ip || '').replace(/^::ffff:/i, '');
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(v4);
+  if (!m) return false;
+  const n = ((+m[1] << 24) >>> 0) + (+m[2] << 16) + (+m[3] << 8) + (+m[4]);
+  return (cidrs || []).some(c => {
+    const k = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d+)$/.exec(String(c));
+    if (!k) return false;
+    const base = ((+k[1] << 24) >>> 0) + (+k[2] << 16) + (+k[3] << 8) + (+k[4]);
+    const bits = +k[5];
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return ((n & mask) >>> 0) === ((base & mask) >>> 0);
+  });
+}
+
 class BanList {
   constructor(after, windowSec, banSec) { this.after = after; this.windowMs = windowSec * 1000; this.banMs = banSec * 1000; this.map = new Map(); }
   isBanned(ip) { const f = this.map.get(ip); return !!(f && f.bannedUntil > Date.now()); }
@@ -76,4 +92,4 @@ class BanList {
   count() { const now = Date.now(); let n = 0; for (const f of this.map.values()) if (f.bannedUntil > now) n++; return n; }
 }
 
-module.exports = { sendJson, sendText, readJson, parseCookies, cookie, basicCreds, serveStatic, BanList };
+module.exports = { sendJson, sendText, readJson, parseCookies, cookie, basicCreds, serveStatic, BanList, inNetworks };

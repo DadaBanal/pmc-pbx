@@ -9,6 +9,8 @@
  *   node admin.js apply                     generate config and reload the engine, as the Apply button does
  *   node admin.js addext <dept> <model> <name...>   add an extension, next free number in that department
  *   node admin.js link <user> <ext|none>    link a sign-in to one extension (the browser phone), or unlink
+ *   node admin.js phoneuser <sam> <name...>  put a Windows account on the phone users list with a browser phone
+ *   node admin.js phoneusers                the phone users list
  * Config dir: PMC_PBX_CONF (default /etc/pmc-pbx).
  */
 const readline = require('readline');
@@ -17,6 +19,7 @@ const { Store } = require('./lib/store');
 const V = require('./lib/validate');
 const auth = require('./lib/auth');
 const { applyChanges } = require('./server');
+const PU = require('./lib/phoneusers');
 
 const cfg = loadConfig(process.env.PMC_PBX_CONF || '/etc/pmc-pbx');
 const store = new Store(cfg);
@@ -76,6 +79,21 @@ async function password(prompt) {
       console.log('extension ' + e.ext + ' "' + e.name + '" (' + e.model + ', ' + e.dept + ') added, directory version ' + version + '. Run apply.');
       break;
     }
+    case 'phoneuser': {
+      // the group check still happens at every sign-in; this only gives the person their phone ahead of it
+      const name = rest.join(' ').trim();
+      if (!a1 || !a2) { console.error('usage: phoneuser <windows-name> <display name...>'); process.exit(2); }
+      const display = (a2 + ' ' + name).trim();
+      const r = PU.add(cfg, store, a1, display, cfg.ad ? cfg.ad.groups[0] : '', 'cli');
+      console.log(r.created ? a1 + ' added as ' + r.ext + ' "' + display + '". Run apply.' : a1 + ' is already on the list as ' + r.user.ext);
+      break;
+    }
+    case 'phoneusers': {
+      const list = PU.load(cfg).users;
+      for (const u of list) console.log(u.sam + '  ' + u.ext + '  ' + u.name + (u.disabled ? '  OFF' : '') + '  last sign-in ' + (u.lastSignIn || 'never'));
+      console.log(list.length + ' phone user(s)');
+      break;
+    }
     case 'link': {
       if (!a1 || !a2) { console.error('usage: link <user> <ext|none>'); process.exit(2); }
       const data = auth.loadUsers(cfg.usersFile);
@@ -102,7 +120,7 @@ async function password(prompt) {
       break;
     }
     default:
-      console.error('commands: adduser <name> <role> | passwd <name> | users | check | apply | addext <dept> <model> <name...> | link <user> <ext|none>');
+      console.error('commands: adduser <name> <role> | passwd <name> | users | check | apply | addext <dept> <model> <name...> | link <user> <ext|none> | phoneuser <sam> <name...> | phoneusers');
       process.exit(2);
   }
 })().catch(err => { console.error(err.message); process.exit(1); });

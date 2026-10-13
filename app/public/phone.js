@@ -120,7 +120,7 @@
   function renderLogin(message) {
     $('#who').innerHTML = '';
     showStatusPlain('Signed out', 'warn');
-    $('#main').innerHTML = '<div class="login"><div class="card"><h2>Sign in to your phone</h2><p class="sub">Use the name and password ICT gave you. Calls to your extension will ring in this browser.</p>' +
+    $('#main').innerHTML = '<div class="login"><div class="card"><h2>Sign in to your phone</h2><p class="sub">Use your Windows name and password, the ones you use to sign in to a hospital PC. Calls to your extension will ring here.</p>' +
       (message ? '<div class="banner err" role="alert">' + esc(message) + '</div>' : '') +
       '<form id="login"><div><label for="ln">Name</label><input id="ln" name="name" autocomplete="username" required autofocus></div>' +
       '<div><label for="lp">Password</label><input id="lp" name="password" type="password" autocomplete="current-password" required></div>' +
@@ -315,7 +315,7 @@
     try { S.creds = await api('GET', '/api/softphone'); }
     catch (e) {
       showStatusPlain('No phone', 'bad');
-      $('#who').innerHTML = '<span class="name">' + esc(S.me.name) + '</span><span class="sep">&middot;</span><a href="#" id="out">Sign out</a>';
+      $('#who').innerHTML = '<span class="name">' + esc(S.me.display || S.me.name) + '</span><span class="sep">&middot;</span><a href="#" id="out">Sign out</a>';
       $('#out').onclick = async ev => { ev.preventDefault(); try { await api('POST', '/api/logout'); } catch (x) { /* out */ } location.reload(); };
       $('#main').innerHTML = '<div class="login"><div class="card"><h2>No phone yet</h2><p class="sub">' + esc(e.message) + '</p>' +
         (S.me.role !== 'phone' ? '<p class="why"><a href="/">Open the phone directory instead</a></p>' : '') + '</div></div>';
