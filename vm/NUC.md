@@ -175,7 +175,40 @@ run is void.
 
 **2.7 Checkpoint** (elevated): `Checkpoint-VM -Name PMC-PBX01 -SnapshotName phase2-asterisk-22.11.0`
 
-Then phase 3: the "On the VM" block in `app/README.md`, and the first two T30P on the same switch.
+---
+
+## Phase 3 - the application, then the first call
+
+**3.0 The engine's own config.** `build-asterisk.sh` ends with `make samples`, so `/etc/asterisk` holds Asterisk's
+stock `pjsip.conf` and `extensions.conf`. Those carry none of the `#include` lines that pull in the generated
+output, so the engine loads but holds **no transport, no endpoint and no `pmc-internal` context**, and Apply
+rightly refuses. Found on PMC-PBX01, 13 Oct 2026. The repo's four files replace them: the same four CI installs.
+**`ari.conf` stays out.** It is a template with a placeholder password, and the app does not use ARI. Copied as-is,
+it puts a working ARI user with a known password on 127.0.0.1:8088, which is what happened on 13 Oct.
+
+This is part of the "On the VM" block in `app/README.md`, after the ownership lines:
+
+```
+sudo -u pmcpbx node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out
+sudo cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf /etc/asterisk/
+sudo chown asterisk:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf /etc/asterisk/rtp.conf /etc/asterisk/http.conf
+sudo systemctl restart asterisk
+```
+
+Gate: `sudo asterisk -rx 'pjsip show transports'` lists `transport-tls`, and `sudo grep -c REPLACE-ON-THE-VM
+/etc/asterisk/ari.conf` prints 0, or the file is the stock sample with no users.
+
+**3.1 The application:** the rest of the "On the VM" block in `app/README.md`. Two traps, both met on 13 Oct:
+- **Never `tls/*.pem` under sudo.** The glob is expanded by your own shell, which cannot read the 0750 directory.
+  Name the files.
+- The directory is 0750 root:asterisk, so any check of it runs under sudo with absolute paths. A check that reads
+  nothing can still "match" two empty results.
+
+Gate: `curl -s https://pbx.pmcne.ph/health` (the provisioning listener, port 443) from the guest and from the build
+PC, over TLS with the `*.pmcne.ph` certificate. The admin screen is the other listener, on 8443.
+
+**3.2 First call:** two of the four T30P on the same switch. 1001 dials 1002, audio both ways, SRTP shown in
+`pjsip show channelstats` (design section 10).
 
 ---
 

@@ -63,11 +63,21 @@ sudo cp app/sample/directory.json /etc/pmc-pbx/directory.json # replace with the
 # the wildcard certificate and key as /etc/pmc-pbx/tls/cert.pem and key.pem (both the app and the engine read them)
 sudo chown -R pmcpbx:pmcpbx /etc/pmc-pbx /var/lib/pmc-pbx
 sudo chmod 0700 /etc/pmc-pbx/secrets
-sudo chgrp asterisk /etc/pmc-pbx/tls /etc/pmc-pbx/tls/*.pem /var/lib/pmc-pbx/out/asterisk
-sudo chmod 0750 /etc/pmc-pbx/tls && sudo chmod 0640 /etc/pmc-pbx/tls/*.pem
+# explicit file names, never tls/*.pem: the glob is expanded by YOUR shell, which cannot read the 0750 directory,
+# so it reaches sudo unexpanded or wrong (13 Oct 2026, PMC-PBX01)
+sudo chgrp asterisk /etc/pmc-pbx/tls /etc/pmc-pbx/tls/cert.pem /etc/pmc-pbx/tls/key.pem /var/lib/pmc-pbx/out/asterisk
+sudo chmod 0750 /etc/pmc-pbx/tls && sudo chmod 0640 /etc/pmc-pbx/tls/cert.pem /etc/pmc-pbx/tls/key.pem
 sudo chmod 2750 /var/lib/pmc-pbx/out/asterisk         # setgid: generated includes inherit group asterisk
 sudo usermod -aG asterisk pmcpbx
 echo 'pmcpbx ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx *' | sudo tee /etc/sudoers.d/pmc-pbx
+# the engine's own config: the repo's files carry the #include lines for the generated output. Same four files CI
+# installs. ari.conf stays OUT: it is a template with a placeholder password, and the app does not use ARI.
+sudo -u pmcpbx node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out   # as pmcpbx: root would leave root-owned output
+for f in pjsip extensions rtp http; do sudo cp -p /etc/asterisk/$f.conf /etc/asterisk/$f.conf.sample-$(date +%Y%m%d) 2>/dev/null; done
+sudo cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf /etc/asterisk/
+sudo chown asterisk:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf /etc/asterisk/rtp.conf /etc/asterisk/http.conf
+sudo systemctl restart asterisk
+sudo asterisk -rx 'pjsip show transports' | grep -q 'transport-tls' && echo 'TLS transport loaded' || echo 'TLS transport MISSING'
 sudo -u pmcpbx PMC_PBX_CONF=/etc/pmc-pbx node app/admin.js adduser dada admin
 sudo install -m 0644 app/pmc-pbx.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now pmc-pbx
