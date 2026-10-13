@@ -95,7 +95,14 @@ async function password(prompt) {
       // parsed: anything that is not that shape is refused whole. Applies only what it added, and only when nothing
       // else is waiting, so a sync never pushes someone's unapplied edits live.
       const dry = a1 === '--dry-run';
-      const raw = fs.readFileSync(0, 'utf8');
+      // read stdin as a stream to its end: under sshd it arrives in chunks over a socket, and one blocking read can
+      // return part of it (14 Oct 2026: a 1,139-byte member list from DND-SQL01 arrived as "not JSON")
+      const raw = await new Promise((resolve, reject) => {
+        const chunks = []; let size = 0;
+        process.stdin.on('data', c => { size += c.length; if (size > 1024 * 1024) { reject(new Error('stdin over 1 MB')); process.stdin.destroy(); } else chunks.push(c); });
+        process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        process.stdin.on('error', reject);
+      }).catch(e => { console.error(e.message); process.exit(2); });
       let members;
       try { members = JSON.parse(raw); } catch (e) { console.error('stdin is not JSON'); process.exit(2); }
       if (!Array.isArray(members) || members.length > 5000 || !members.every(m => m && typeof m.sam === 'string' && m.sam.length <= 64 && (m.name === undefined || (typeof m.name === 'string' && m.name.length <= 128)))) {

@@ -382,3 +382,20 @@ test('the sync command the scheduled task runs: strict input, adds and applies, 
     void execFileSync;
   } finally { env.cleanup(); delete process.env.FAKE_PJSIP_FILE; }
 });
+
+test('the sync command reads its input to the end even when it arrives in pieces, as it does over SSH', { skip, timeout: 60000 }, async () => {
+  const { spawn } = require('child_process');
+  const env = makeEnv({ ad: { url: 'ldaps://x:1', pin: 'AA', baseDN: 'DC=x', upnSuffix: '@pmcne.ph', groups: ['PMO Team'], dept: 'ICT' } });
+  try {
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'admin.js'), 'sync-members', '--dry-run'], { env: Object.assign({}, process.env, { PMC_PBX_CONF: env.conf }) });
+    let out = '', err = '';
+    child.stdout.on('data', d => { out += d; }); child.stderr.on('data', d => { err += d; });
+    const json = JSON.stringify(Array.from({ length: 40 }, (_, i) => ({ sam: 'user.' + i, name: 'User ' + i + ' Pe\u00f1a', group: 'PMO Team' })));
+    child.stdin.write(json.slice(0, 700));
+    await new Promise(r => setTimeout(r, 400));            // the rest arrives later, like a second TCP segment
+    child.stdin.end(json.slice(700));
+    const code = await new Promise(r => child.on('close', r));
+    assert.equal(code, 0, err + out);
+    assert.match(out, /would add: user\.0, .*user\.39/);
+  } finally { env.cleanup(); }
+});

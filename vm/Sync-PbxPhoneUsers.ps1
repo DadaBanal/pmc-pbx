@@ -50,6 +50,8 @@ if ($members.Count -eq 0) { $json = '[]' }
 $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $mode = if ($Apply) { 'sync' } else { 'preview' }
 $ssh = Join-Path $env:WINDIR 'System32\OpenSSH\ssh.exe'
+# 5.1 turns a native program's stderr into a terminating error under 'Stop': every run must reach the log line
+$ErrorActionPreference = 'Continue'
 $out = $json | & $ssh -i (Join-Path $Dir 'pbx_sync_ed25519') -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15 `
     -o StrictHostKeyChecking=yes -o ('UserKnownHostsFile=' + (Join-Path $Dir 'known_hosts')) pmcsync@10.2.0.10 $mode 2>&1
 $code = $LASTEXITCODE
