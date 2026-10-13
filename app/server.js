@@ -99,26 +99,48 @@ function start(cfg, opts) {
   const adminPlain = !!cfg.admin.insecureHttp && /^(127\.0\.0\.1|localhost|::1)$/.test(cfg.admin.host);
   if (cfg.admin.insecureHttp && !adminPlain) throw new Error('admin.insecureHttp is only allowed with admin.host 127.0.0.1, localhost or ::1');
   const provBans = new H.BanList(cfg.banAfter, cfg.banWindowSec, cfg.banSec);
-  const loginBans = new H.BanList(cfg.banAfter, cfg.banWindowSec, cfg.banSec);
+  const loginBans = new H.BanList(cfg.loginBanAfter, cfg.banWindowSec, cfg.banSec);
+  const accountBans = new H.BanList(cfg.accountBanAfter, cfg.accountBanWindowSec, cfg.accountBanSec);
   const startedAt = Date.now();
 
   // Who a session belongs to: an admin-screen account, or a phone user from Active Directory (token name "ad:<sam>").
   // Both are re-read on every request, so switching someone off takes effect at once.
-  function sessionUser(req) {
-    const session = auth.readToken(getSecrets().session, H.parseCookies(req)[COOKIE]);
-    if (!session) return null;
-    if (session.name.startsWith('ad:')) {
+  function identity(name) {
+    if (name.startsWith('ad:')) {
       if (!cfg.ad) return null;
-      const u = PU.find(PU.load(cfg), session.name.slice(3));
+      const u = PU.find(PU.load(cfg), name.slice(3));
       return u && !u.disabled && u.ext ? { name: u.sam, display: u.name, role: 'phone', ext: u.ext, ad: true } : null;
     }
-    const u = auth.loadUsers(cfg.usersFile).users.find(x => x.name === session.name);
+    const u = auth.loadUsers(cfg.usersFile).users.find(x => x.name === name);
     return u && !u.disabled ? u : null;
+  }
+  const sessionOf = req => auth.readToken(getSecrets().session, H.parseCookies(req)[COOKIE]);
+  function sessionUser(req) { const s = sessionOf(req); return s ? identity(s.name) : null; }
+
+  // Open browser-phone connections, by session name. Switching someone off, removing them, unlinking their phone or
+  // removing their extension closes these at once; a sweep every 30 s closes any whose session is no longer valid
+  // (expired, disabled elsewhere, phone changed). Review 14 Oct 2026: an open socket used to outlive all of those.
+  const liveWs = new Set();
+  function dropPhones(sessionName, why) {
+    for (const w of liveWs) if (w.key === sessionName) { liveWs.delete(w); w.socket.destroy(); w.up.destroy(); log('ws ' + w.ip + ' ' + w.key + ' closed: ' + why); }
+  }
+  const sweep = setInterval(() => {
+    for (const w of liveWs) {
+      const u = w.exp > Date.now() ? identity(w.key) : null;
+      if (!u || u.ext !== w.ext) { liveWs.delete(w); w.socket.destroy(); w.up.destroy(); log('ws ' + w.ip + ' ' + w.key + ' closed: session no longer valid'); }
+    }
+  }, 30000);
+  if (sweep.unref) sweep.unref();
+  // every local account or phone user that points at an extension
+  function linksTo(ext) {
+    const out = auth.loadUsers(cfg.usersFile).users.filter(u => u.ext === ext).map(u => u.name);
+    if (cfg.ad) for (const u of PU.load(cfg).users) if (u.ext === ext) out.push('phone user ' + u.sam);
+    return out;
   }
   // what the phone site serves: the phone page and what it loads, nothing of the admin screen
   const PHONE_SITE_FILES = /^\/(phone|phone\.html|phone\.js|sip\.js|style\.css|manifest\.webmanifest|sw\.js|icons\/[a-z0-9-]+\.png)$/;
   const phoneFromOk = ip => !cfg.phoneNetworks || H.inNetworks(ip, cfg.phoneNetworks);
-  const NOT_HERE = 'PMC Phone works only on the hospital\'s wired network.';
+  const NOT_HERE = 'PMC Phone is not available on this network.';
   const AD_SAY = new Set(['account disabled', 'account locked out', 'password expired', 'password must be changed', 'account expired', 'not allowed at this time', 'not allowed from this computer']);
 
   const certDaysLeft = () => Math.floor((new Date(certInfo.validTo).getTime() - Date.now()) / 86400000);
@@ -196,20 +218,22 @@ function start(cfg, opts) {
     ['POST', /^\/api\/logout$/, 'phone', ctx => { ctx.res.setHeader('Set-Cookie', H.cookie(COOKIE, '', 0, !adminPlain)); return { ok: true }; }],
     // The browser phone's own credentials: only ever the signed-in user's linked extension, never another
     ['GET', /^\/api\/softphone$/, 'phone', ctx => {
-      if (!ctx.user.ext) throw new HttpError(404, 'No phone is linked to your sign-in yet. Ask ICT to link your extension.');
+      if (!ctx.user.ext) throw new HttpError(404, 'No phone is linked to your sign-in yet. Ask PMO ICT to link your extension.');
       const dir = V.normalizeDirectory(store.loadDirectory());
       const e = dir.extensions.find(x => x.ext === ctx.user.ext);
-      if (!e) throw new HttpError(404, 'Your extension ' + ctx.user.ext + ' is not in the phone directory. Ask ICT.');
+      if (!e) throw new HttpError(404, 'Your extension ' + ctx.user.ext + ' is not in the phone directory. Ask PMO ICT.');
       const spec = phones.modelSpec(e.model);
-      if (!spec || !spec.webrtc) throw new HttpError(409, 'Extension ' + e.ext + ' is set up for ' + (spec ? spec.label : e.model) + ', not the browser phone. Ask ICT to change it.');
+      if (!spec || !spec.webrtc) throw new HttpError(409, 'Extension ' + e.ext + ' is set up for ' + (spec ? spec.label : e.model) + ', not the browser phone. Ask PMO ICT to change it.');
       const password = getSecrets().sip[e.ext];
-      if (!password) throw new HttpError(409, 'Extension ' + e.ext + ' is not switched on yet. ICT must press Apply changes.');
+      if (!password) throw new HttpError(409, 'Your phone ' + e.ext + ' is not switched on yet. PMO ICT will switch it on; try again later.');
       store.audit({ who: ctx.user.name, action: 'browser phone sign-in', detail: e.ext });
       return { ext: e.ext, name: e.name, dept: e.dept || '', password, domain: cfg.fqdn, wsPath: '/ws' };
     }],
     ['GET', /^\/api\/phonebook$/, 'phone', () => {
       const dir = V.normalizeDirectory(store.loadDirectory());
-      return { extensions: dir.extensions.map(e => ({ ext: e.ext, name: e.name, dept: e.dept || '' })), departments: dir.departments.map(x => x.name) };
+      // a switched-off phone user is not someone to call
+      const off = new Set(cfg.ad ? PU.load(cfg).users.filter(u => u.disabled).map(u => u.ext) : []);
+      return { extensions: dir.extensions.filter(e => !off.has(e.ext)).map(e => ({ ext: e.ext, name: e.name, dept: e.dept || '' })), departments: dir.departments.map(x => x.name) };
     }],
     ['GET', /^\/api\/directory$/, 'viewer', () => V.normalizeDirectory(store.loadDirectory())],
     ['GET', /^\/api\/extensions\/next$/, 'editor', ctx => ({ ext: V.nextFreeExt(V.normalizeDirectory(store.loadDirectory()), ctx.url.searchParams.get('dept') || '') })],
@@ -238,6 +262,9 @@ function start(cfg, opts) {
     ['DELETE', /^\/api\/extensions\/(\d{4})$/, 'editor', ctx => {
       const dir = V.normalizeDirectory(store.loadDirectory());
       const cur = findExt(dir, ctx.params[0]);
+      // a sign-in still pointing at a removed number would inherit whoever gets that number next (review 14 Oct 2026)
+      const linked = linksTo(cur.ext);
+      if (linked.length) throw new HttpError(409, 'Extension ' + cur.ext + ' is the phone of ' + linked.join(', ') + '. Unlink it on the Users page first' + (cfg.ad ? ', or remove the phone user there' : '') + '.');
       dir.extensions = dir.extensions.filter(x => x !== cur);
       for (const x of dir.extensions) x.keys = x.keys.filter(k => k.ext !== cur.ext);
       check(dir);
@@ -308,8 +335,15 @@ function start(cfg, opts) {
       if (body.disabled === undefined) throw new HttpError(400, 'nothing to change');
       const u = PU.update(cfg, ctx.params[0], { disabled: !!body.disabled });
       if (!u) throw new HttpError(404, 'phone user not found');
+      if (u.disabled) dropPhones('ad:' + u.sam, 'switched off');
       store.audit({ who: ctx.user.name, action: 'edit phone user', detail: u.sam + ': ' + (u.disabled ? 'switched off' : 'switched on') });
       return { ok: true };
+    }],
+    ['DELETE', /^\/api\/phone-users\/([a-z0-9._-]+)$/, 'admin', ctx => {
+      const r = PU.remove(cfg, store, ctx.params[0], ctx.user.name);
+      if (!r) throw new HttpError(404, 'phone user not found');
+      dropPhones('ad:' + r.user.sam, 'removed');
+      return { ok: true, ext: r.ext };
     }],
     ['GET', /^\/api\/audit$/, 'admin', ctx => store.readAudit(Math.min(1000, Number(ctx.url.searchParams.get('limit')) || 200))],
     ['GET', /^\/api\/users$/, 'admin', () => auth.loadUsers(cfg.usersFile).users.map(publicUser)],
@@ -337,6 +371,7 @@ function start(cfg, opts) {
       if (body.password) { try { auth.setPassword(data, u.name, body.password, null, ctx.user.name); } catch (e) { throw new HttpError(400, e.message); } changes.push('password reset'); }
       if (body.ext !== undefined) { const ext = checkExt(body.ext); if ((ext || null) !== (u.ext || null)) { if (ext) u.ext = ext; else delete u.ext; changes.push(ext ? 'phone ' + ext : 'phone unlinked'); } }
       auth.saveUsers(cfg.usersFile, data);
+      if (u.disabled || changes.some(c => /^phone /.test(c))) dropPhones(u.name, changes.join(', '));
       store.audit({ who: ctx.user.name, action: 'edit user', detail: u.name + ': ' + (changes.join(', ') || 'no change') });
       return { ok: true };
     }],
@@ -357,8 +392,11 @@ function start(cfg, opts) {
     const ip = req.socket.remoteAddress || '?';
     const url = new URL(req.url || '/', 'https://admin.local');
     const p = url.pathname;
-    // the browser phone answers only the networks it is enabled on; the admin screen is not affected
-    if (!phoneFromOk(ip) && (site === 'phone' || p === '/phone' || p === '/phone.html' || p === '/api/softphone')) {
+    if (!adminPlain) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+    // decoded and normalised before any check, so %2Fphone.html and friends are judged as what they will serve
+    let np = p; try { np = path.posix.normalize(decodeURIComponent(p)); } catch (e) { return H.sendText(res, 400, 'text/plain', 'bad path'); }
+    // the browser phone answers only the networks it is enabled on (when phoneNetworks is set); the admin screen is not affected
+    if (!phoneFromOk(ip) && (site === 'phone' || np === '/phone' || np === '/phone.html' || np === '/api/softphone' || np === '/api/phonebook')) {
       log('phone ' + ip + ' refused: not on an enabled network (' + p + ')');
       return p.startsWith('/api/') ? H.sendJson(res, 403, { error: NOT_HERE }) : H.sendText(res, 403, 'text/plain; charset=utf-8', NOT_HERE);
     }
@@ -376,16 +414,22 @@ function start(cfg, opts) {
       if (loginBans.isBanned(ip)) return H.sendJson(res, 429, { error: 'too many failed sign-ins, try again later' });
       let body; try { body = await H.readJson(req); } catch (e) { return H.sendJson(res, 400, { error: e.message }); }
       const name = String(body.name || '').trim().toLowerCase();
-      const user = auth.loadUsers(cfg.usersFile).users.find(u => u.name === name);
+      // per account as well as per address, and a success never wipes the address's count (review 14 Oct 2026)
+      const acct = 'acct:' + ((cfg.ad && ldap.accountName(name, cfg.ad.upnSuffix)) || name);
+      if (accountBans.isBanned(acct)) { log('login ' + ip + ' refused for ' + (name || '?') + ': account cooling down'); return H.sendJson(res, 429, { error: 'too many failed sign-ins for this name, try again in 15 minutes' }); }
+      const fail = why => { loginBans.fail(ip); accountBans.fail(acct); log('login ' + ip + ' FAILED for ' + (name || '?') + (why ? ': ' + why : '')); };
+      let user = auth.loadUsers(cfg.usersFile).users.find(u => u.name === name);
+      // the phone site, reachable from the internet, never checks an admin-screen password
+      if (user && site === 'phone' && user.role !== 'phone') { fail('admin-screen account on the phone site'); return H.sendJson(res, 401, { error: 'wrong name or password' }); }
       if (!user && cfg.ad) {
         if (!phoneFromOk(ip)) { log('phone ' + ip + ' AD sign-in refused: not on an enabled network'); return H.sendJson(res, 403, { error: NOT_HERE }); }
-        return adLogin(req, res, ip, name, String(body.password || ''));
+        return adLogin(req, res, ip, name, String(body.password || ''), acct, fail);
       }
       if (!user || user.disabled || !auth.verifyPassword(user, String(body.password || ''))) {
-        loginBans.fail(ip); log('admin ' + ip + ' login FAILED for ' + (name || '?'));
+        fail();
         return H.sendJson(res, 401, { error: 'wrong name or password' });
       }
-      loginBans.clear(ip);
+      accountBans.clear(acct);
       res.setHeader('Set-Cookie', H.cookie(COOKIE, auth.makeToken(getSecrets().session, user.name, cfg.admin.sessionHours), cfg.admin.sessionHours * 3600, !adminPlain));
       store.audit({ who: user.name, action: 'sign in', detail: 'from ' + ip });
       log('admin ' + ip + ' login ' + user.name);
@@ -417,22 +461,29 @@ function start(cfg, opts) {
 
   // A domain account: password checked by binding to the domain controller, then group membership. On the first
   // sign-in the person is added to the phone users list with a browser phone, and the engine is reloaded.
-  async function adLogin(req, res, ip, name, password) {
+  async function adLogin(req, res, ip, name, password, acct, fail) {
     const r = await ldap.checkPerson(cfg.ad, name, password);
     if (!r.ok) {
-      if (r.unavailable) { log('phone ' + ip + ' AD sign-in for ' + (name || '?') + ' UNAVAILABLE: ' + r.reason); return H.sendJson(res, 503, { error: 'The hospital directory did not answer. Try again in a minute.' }); }
-      loginBans.fail(ip); log('phone ' + ip + ' AD sign-in FAILED for ' + (name || '?') + ': ' + r.reason);
+      // an outage still counts against the name: otherwise a stalled directory would be a free retry
+      if (r.unavailable) { accountBans.fail(acct); log('phone ' + ip + ' AD sign-in for ' + (name || '?') + ' UNAVAILABLE: ' + r.reason); return H.sendJson(res, 503, { error: 'The hospital directory did not answer. Try again in a minute.' }); }
+      fail('AD: ' + r.reason);
       if (/^not in /.test(r.reason)) return H.sendJson(res, 403, { error: 'Your Windows account is not on the phone list. Ask PMO ICT.' });
       if (AD_SAY.has(r.reason)) return H.sendJson(res, 401, { error: 'Windows says: ' + r.reason + '.' });
       return H.sendJson(res, 401, { error: 'wrong name or password' });
     }
-    loginBans.clear(ip);
+    accountBans.clear(acct);
     let pu = PU.find(PU.load(cfg), r.sam);
     if (pu && pu.disabled) { log('phone ' + ip + ' AD sign-in refused for ' + r.sam + ': switched off'); return H.sendJson(res, 403, { error: 'PMO ICT has switched off your phone. Ask them.' }); }
     if (!pu) {
+      // apply only when nothing else is waiting: a phone user's first sign-in must never push an editor's
+      // unapplied changes live (review 14 Oct 2026). Otherwise the new phone waits for PMO ICT's next Apply.
+      const m = store.loadManifest(), before = V.normalizeDirectory(store.loadDirectory());
+      const clean = !!m && m.directoryVersion === before.version;
       try { pu = PU.add(cfg, store, r.sam, r.name, r.group, 'ad:' + r.sam).user; } catch (e) { log('phone user ' + r.sam + ' NOT added: ' + e.message); return H.sendJson(res, 409, { error: 'Could not give you a phone: ' + e.message + '. Ask PMO ICT.' }); }
-      const ap = await applyChanges(cfg, store, 'ad:' + r.sam);
-      log('phone user ' + r.sam + ' added as ' + pu.ext + '; apply ' + (ap.ok ? 'ok' : 'FAILED: ' + (ap.error || (ap.problems || []).join('; '))));
+      if (clean) {
+        const ap = await applyChanges(cfg, store, 'ad:' + r.sam);
+        log('phone user ' + r.sam + ' added as ' + pu.ext + '; apply ' + (ap.ok ? 'ok' : 'FAILED: ' + (ap.error || (ap.problems || []).join('; '))));
+      } else log('phone user ' + r.sam + ' added as ' + pu.ext + '; NOT applied: other changes are waiting for PMO ICT');
     }
     PU.update(cfg, r.sam, { lastSignIn: new Date().toISOString() });
     res.setHeader('Set-Cookie', H.cookie(COOKIE, auth.makeToken(getSecrets().session, 'ad:' + r.sam, cfg.admin.sessionHours), cfg.admin.sessionHours * 3600, !adminPlain));
@@ -463,7 +514,8 @@ function start(cfg, opts) {
     const origin = req.headers.origin || '';
     const host = req.headers.host || '';
     if (!origin || origin !== (adminPlain ? 'http://' : 'https://') + host) return refuse('403 Forbidden', 'origin ' + (origin || 'none') + ' is not this site');
-    const user = sessionUser(req);
+    const session = sessionOf(req);
+    const user = session ? identity(session.name) : null;
     if (!user) return refuse('401 Unauthorized', 'no session');
     if (!auth.roleAtLeast(user.role, 'phone') || !user.ext) return refuse('403 Forbidden', user.name + ' has no linked phone');
     const up = net.connect(cfg.asterisk.wsPort, cfg.asterisk.wsHost);
@@ -478,8 +530,10 @@ function start(cfg, opts) {
       if (head && head.length) up.write(head);
       up.pipe(socket);
       socket.pipe(up);
-      up.on('close', () => socket.destroy());
-      socket.on('close', () => up.destroy());
+      const live = { key: session.name, ext: user.ext, exp: session.exp, ip, socket, up };
+      liveWs.add(live);
+      up.on('close', () => { liveWs.delete(live); socket.destroy(); });
+      socket.on('close', () => { liveWs.delete(live); up.destroy(); });
       log('ws ' + ip + ' ' + user.name + ' phone ' + user.ext + ' connected');
     });
   }
@@ -507,6 +561,8 @@ function start(cfg, opts) {
   return {
     publicServer, adminServer, phoneServer, store,
     close() {
+      clearInterval(sweep);
+      for (const w of liveWs) { w.socket.destroy(); w.up.destroy(); }
       for (const s of [publicServer, adminServer, phoneServer].filter(Boolean)) { if (s.closeAllConnections) s.closeAllConnections(); s.close(); }
     }
   };

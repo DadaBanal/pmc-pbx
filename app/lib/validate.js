@@ -13,7 +13,8 @@ function normalizeExtension(e) {
   e = e || {};
   return {
     ext: String(e.ext == null ? '' : e.ext).trim(),
-    name: String(e.name || '').trim().replace(/\s+/g, ' '),
+    // ';' starts a comment in Asterisk config and would cut the callerid line short (review 14 Oct 2026)
+    name: String(e.name || '').replace(/;/g, ' ').trim().replace(/\s+/g, ' '),
     dept: String(e.dept || '').trim(),
     site: String(e.site || 'PMC').trim() || 'PMC',
     model: String(e.model || 'T31P').trim(),
@@ -96,7 +97,25 @@ function validateDirectory(dir, cfg) {
   for (const e of dir.extensions) {
     e.keys.forEach((k, i) => { if (EXT_RE.test(k.ext) && !seenExt.has(k.ext)) out.push(e.ext + ': button ' + (i + 1) + ' points at unknown extension ' + k.ext); });
   }
+  // a browser phone with no usable media address has no audio at all: refuse it here instead of failing silently
+  const web = dir.extensions.filter(e => { const s = MODELS.includes(e.model) ? phones.modelSpec(e.model) : null; return s && s.webrtc; });
+  if (cfg && web.length && !webrtcMediaAddress(cfg)) out.push('browser phones (' + web.map(e => e.ext).join(', ') + ') need a media address: set webrtcMediaAddress, or phoneSite.host or admin.host to a LAN address');
   return out;
+}
+
+// Where the browser phone's audio is sent from. Asterisk binds a call's RTP to its transport's bind address
+// (res_pjsip_sdp_rtp.c create_rtp) unless the endpoint names one, and transport-ws is bound to 127.0.0.1, so a
+// webphone with no media address has no audio at all (13 Oct 2026). Order: webrtcMediaAddress (explicit; loopback
+// allowed, for a test box where the engine and the browser are the same machine), then phoneSite.host, then
+// admin.host. A derived address must be a real LAN address, never loopback or a wildcard.
+function webrtcMediaAddress(cfg) {
+  if (!cfg) return '';
+  const ipv4 = a => /^\d+\.\d+\.\d+\.\d+$/.test(a || '');
+  if (ipv4(cfg.webrtcMediaAddress)) return cfg.webrtcMediaAddress;
+  for (const a of [cfg.phoneSite && cfg.phoneSite.host, cfg.admin && cfg.admin.host]) {
+    if (ipv4(a) && !/^(127\.|0\.0\.0\.0$)/.test(a)) return a;
+  }
+  return '';
 }
 
 function nextFreeExt(dir, deptName) {
@@ -122,4 +141,4 @@ function normalizeDirectory(dir) {
   };
 }
 
-module.exports = { normalizeExtension, normalizeDepartment, normalizeDirectory, validateDirectory, nextFreeExt, MODELS, SITES, EXT_RE, MAC_RE };
+module.exports = { normalizeExtension, normalizeDepartment, normalizeDirectory, validateDirectory, nextFreeExt, webrtcMediaAddress, MODELS, SITES, EXT_RE, MAC_RE };

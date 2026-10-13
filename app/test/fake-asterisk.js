@@ -45,6 +45,10 @@ switch (cmd) {
   case 'dialplan reload':
     console.log('Dialplan reloaded.');
     break;
+  case 'module reload app_voicemail.so':
+  case 'module reload res_rtp_asterisk.so':
+    console.log("Module '" + cmd.split(' ').pop() + "' reloaded successfully.");
+    break;
   case 'dialplan show pmc-internal': {
     console.log("[ Context 'pmc-internal' created by 'pbx_config' ]");
     for (const x of exts()) console.log("  '" + x + "' =>         hint: PJSIP/" + x + "                              [extensions_pmc.conf:20]");

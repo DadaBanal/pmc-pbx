@@ -1,0 +1,70 @@
+#!/usr/sbin/nft -f
+# PMC-PBX01 host firewall. Dada, 14 Oct 2026: "it should work as long as there is an internet connection but no
+# backdoors to anything else". The browser phone is reachable from the internet; nothing else on this machine is,
+# and a compromise of this machine must not become a way into the hospital LAN.
+#
+#   in, from anywhere      10.2.0.11 tcp 443 (phone site + its WebSocket), 10.2.0.11 udp 10000-10999 (call audio)
+#   in, hospital only      ssh, the admin screen 8443, provisioning 443 on 10.2.0.10, SIP over TLS 5061
+#   out                    call audio anywhere; the engine (user asterisk) to LAN phones; LDAPS to DND-AD01 only;
+#                          DNS to the DC and the UDM; time; updates and git to the INTERNET only. Nothing else
+#                          leaves for the LAN: no pivot from this box to any other hospital system.
+#
+# Load with vm/firewall.sh (auto-rollback after 5 minutes unless confirmed), never with nft -f by hand.
+
+flush ruleset
+
+define LAN        = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+define HOSPITAL   = { 10.2.0.0/22, 10.10.0.0/24 }
+define DC         = 10.10.0.201
+define DNS        = { 10.10.0.201, 10.2.0.1 }
+define PHONE_SITE = 10.2.0.11
+define PROV       = 10.2.0.10
+
+table inet pmc_pbx {
+  chain input {
+    type filter hook input priority 0; policy drop;
+    iif lo accept
+    ct state established,related accept
+    ct state invalid drop
+    meta l4proto { icmp, ipv6-icmp } accept
+
+    # the browser phone, from any network (internet included, through the UDM forward)
+    ip daddr $PHONE_SITE tcp dport 443 accept
+    ip daddr $PHONE_SITE udp dport 10000-10999 accept
+
+    # hospital only
+    ip saddr $HOSPITAL tcp dport 22 accept
+    ip saddr $LAN ip daddr $PROV tcp dport { 443, 8443 } accept
+    ip saddr $LAN tcp dport 5061 accept
+
+    limit rate 6/minute log prefix "pmc-pbx in drop: " level info
+  }
+
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+  }
+
+  chain output {
+    type filter hook output priority 0; policy drop;
+    oif lo accept
+    ct state established,related accept
+    meta l4proto { icmp, ipv6-icmp } accept
+
+    # call audio and its ICE checks, to callers wherever they are
+    udp sport 10000-10999 accept
+    # the engine opening SIP over TLS to a desk phone whose old connection dropped
+    meta skuid "asterisk" ip daddr $LAN tcp dport 1024-65535 accept
+
+    # Windows sign-in, name lookups, time
+    ip daddr $DC tcp dport 636 accept
+    ip daddr $DNS udp dport 53 accept
+    ip daddr $DNS tcp dport 53 accept
+    udp dport 123 accept
+
+    # updates (deb.debian.org) and code (git over ssh to github.com): the internet, never the LAN
+    ip daddr != $LAN tcp dport { 22, 80, 443 } accept
+
+    limit rate 6/minute log prefix "pmc-pbx out drop: " level info
+    reject
+  }
+}

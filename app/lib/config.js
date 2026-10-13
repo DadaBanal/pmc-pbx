@@ -34,10 +34,19 @@ function loadConfig(confDir) {
   // Where the browser phone may be used from (Dada, 13 Oct 2026: "only enable it on the default network"). A list of
   // networks; when set, the phone site, the phone page, phone sign-in, /api/softphone and /ws answer no one else.
   if (cfg.phoneNetworks !== undefined) {
-    if (!Array.isArray(cfg.phoneNetworks) || cfg.phoneNetworks.some(c => !/^\d+\.\d+\.\d+\.\d+\/\d{1,2}$/.test(c))) throw new Error('config.json phoneNetworks must be a list like ["10.2.0.0/22"]');
+    const okCidr = c => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d{1,2})$/.exec(c); return !!m && m.slice(1, 5).every(o => +o <= 255) && +m[5] <= 32; };
+    if (!Array.isArray(cfg.phoneNetworks) || !cfg.phoneNetworks.every(okCidr)) throw new Error('config.json phoneNetworks must be a list like ["10.2.0.0/22"] (octets 0-255, prefix 0-32)');
   }
   // the phone site (optional): { host, port, name }, e.g. 10.2.0.11, 443, phone.pmcne.ph
-  if (cfg.phoneSite) cfg.phoneSite = Object.assign({ port: 443 }, cfg.phoneSite);
+  if (cfg.phoneSite) {
+    cfg.phoneSite = Object.assign({ port: 443 }, cfg.phoneSite);
+    // without a host it would listen on every address, the 13 Oct start failure again (review 14 Oct 2026)
+    if (!/^\d+\.\d+\.\d+\.\d+$/.test(cfg.phoneSite.host || '') || cfg.phoneSite.host === '0.0.0.0') throw new Error('config.json phoneSite.host must be one IPv4 address of this machine (e.g. 10.2.0.11), not empty or 0.0.0.0');
+    const port = Number(cfg.phoneSite.port);
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('config.json phoneSite.port must be a port number');
+    cfg.phoneSite.port = port;
+    if (port && port === Number(cfg.admin.port) && (cfg.admin.host === cfg.phoneSite.host || cfg.admin.host === '0.0.0.0')) throw new Error('config.json: admin and phoneSite would hold the same address and port');
+  }
   // 13 Oct 2026 on PMC-PBX01: listen.host 0.0.0.0 holds port 443 on EVERY address, so the phone site's own address
   // could not bind and the service failed to start. Two listeners on one port must each name their own address.
   if (cfg.phoneSite && cfg.phoneSite.port && cfg.phoneSite.port === cfg.listen.port &&
@@ -49,6 +58,13 @@ function loadConfig(confDir) {
   cfg.banAfter = cfg.banAfter || 10;
   cfg.banWindowSec = cfg.banWindowSec || 600;
   cfg.banSec = cfg.banSec || 3600;
+  // sign-in limits. Per address: higher than provisioning, because a mobile carrier puts many people behind one
+  // address. Per account: AD lockout is OFF on this domain (threshold 0, AD session 14 Oct 2026), so this limit is
+  // the only thing between a guessed name and unlimited password tries.
+  cfg.loginBanAfter = cfg.loginBanAfter || 20;
+  cfg.accountBanAfter = cfg.accountBanAfter || 5;
+  cfg.accountBanWindowSec = cfg.accountBanWindowSec || 900;
+  cfg.accountBanSec = cfg.accountBanSec || 900;
   return cfg;
 }
 

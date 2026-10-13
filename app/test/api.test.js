@@ -168,7 +168,7 @@ test('admin screen API, provisioning and the engine, end to end with a fake engi
 });
 
 test('repeated failed sign-ins lock the address out', { skip }, async t => {
-  const { A, stop } = await boot({ banAfter: 3, banSec: 60 });
+  const { A, stop } = await boot({ loginBanAfter: 3, banSec: 60 });
   t.after(stop);
   for (let i = 0; i < 3; i++) {
     const r = await request(A, 'POST', '/api/login', { body: { name: 'admin', password: 'nope' } });
@@ -176,4 +176,16 @@ test('repeated failed sign-ins lock the address out', { skip }, async t => {
   }
   const r = await request(A, 'POST', '/api/login', { body: { name: 'admin', password: 'AdminPassw0rd!' } });
   assert.equal(r.status, 429, 'even the right password is refused while locked out');
+});
+
+// Review 14 Oct 2026: AD lockout is off on this domain, so the app's per-account limit is the only cap on guesses.
+test('repeated failed sign-ins for one name cool that name down, and only that name', { skip }, async t => {
+  const { A, stop } = await boot({ loginBanAfter: 50, accountBanAfter: 3, accountBanSec: 60 });
+  t.after(stop);
+  for (let i = 0; i < 3; i++) assert.equal((await request(A, 'POST', '/api/login', { body: { name: 'admin', password: 'nope' } })).status, 401);
+  const r = await request(A, 'POST', '/api/login', { body: { name: 'admin', password: 'AdminPassw0rd!' } });
+  assert.equal(r.status, 429, 'the right password is refused while the name cools down');
+  assert.match(r.json.error, /this name/);
+  // control: the address is not banned, so another name still gets a normal answer
+  assert.equal((await request(A, 'POST', '/api/login', { body: { name: 'someone-else', password: 'nope' } })).status, 401);
 });

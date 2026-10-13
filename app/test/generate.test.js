@@ -56,17 +56,65 @@ test('the browser phone sends its audio from a LAN address, never loopback (13 O
   const secrets = { sip: {}, prov: {} };
   G.ensureSecrets(d, secrets);
   const tmpl = p => (/\[pmc-webrtc\]\(!\)\n([\s\S]*?)\n\n/.exec(p) || [])[1] || '';
-  const live = tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host: '10.2.0.10', port: 8443 } }), secrets));
-  assert.match(live, /^media_address=10\.2\.0\.10$/m);
-  assert.match(live, /^bind_rtp_to_media_address=yes$/m);
-  const over = tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host: '10.2.0.10' }, webrtcMediaAddress: '10.2.0.11' }), secrets));
-  assert.match(over, /^media_address=10\.2\.0\.11$/m);
-  // loopback and wildcard are refused: binding there is the fault itself
+  const live = c => Object.assign({}, cfg, { webrtcMediaAddress: undefined }, c);
+  // the phone site's address first: that is the address phones are proven to reach, and the one forwarded from outside
+  let t = tmpl(G.renderPjsip(d, live({ admin: { host: '10.2.0.10', port: 8443 }, phoneSite: { host: '10.2.0.11', port: 443 } }), secrets));
+  assert.match(t, /^media_address=10\.2\.0\.11$/m);
+  assert.match(t, /^bind_rtp_to_media_address=yes$/m);
+  t = tmpl(G.renderPjsip(d, live({ admin: { host: '10.2.0.10', port: 8443 } }), secrets));
+  assert.match(t, /^media_address=10\.2\.0\.10$/m, 'no phone site: the admin listener address');
+  t = tmpl(G.renderPjsip(d, live({ admin: { host: '10.2.0.10' }, phoneSite: { host: '10.2.0.11' }, webrtcMediaAddress: '10.2.0.12' }), secrets));
+  assert.match(t, /^media_address=10\.2\.0\.12$/m, 'an explicit address wins');
+  // derived loopback or wildcard is the fault itself: no media line, and the directory is REFUSED, not applied
   for (const host of ['127.0.0.1', '0.0.0.0', 'localhost', '']) {
-    assert.doesNotMatch(tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host } }), secrets)), /media_address=/, host);
+    const c = live({ admin: { host } });
+    assert.doesNotMatch(tmpl(G.renderPjsip(d, c, secrets)), /media_address=/, host);
+    assert.ok(V.validateDirectory(d, c).some(p => /need a media address/.test(p)), 'refused for admin.host ' + JSON.stringify(host));
   }
-  // control: the template was found at all, so "no media_address" above means something
-  assert.match(tmpl(G.renderPjsip(d, Object.assign({}, cfg, { admin: { host: '127.0.0.1' } }), secrets)), /^webrtc=yes$/m);
+  // control: an explicit loopback (a one-machine test box) is accepted, and the template was found at all
+  assert.equal(V.validateDirectory(d, live({ admin: { host: '127.0.0.1' }, webrtcMediaAddress: '127.0.0.1' })).filter(p => /media address/.test(p)).length, 0);
+  assert.match(tmpl(G.renderPjsip(d, live({ admin: { host: '127.0.0.1' } }), secrets)), /^webrtc=yes$/m);
+});
+
+test('a browser phone is reachable only through the app gate, and a vanished browser does not hold a call open', () => {
+  const d = V.normalizeDirectory(sample);
+  d.extensions.push(V.normalizeExtension({ ext: '3950', name: 'Web', dept: 'ICT', model: 'webphone' }));
+  const secrets = { sip: {}, prov: {} };
+  G.ensureSecrets(d, secrets);
+  const p = G.renderPjsip(d, Object.assign({}, cfg, { webrtcMediaAddress: '10.2.0.11' }), secrets);
+  const web = (/\[pmc-webrtc\]\(!\)\n([\s\S]*?)\n\n/.exec(p) || [])[1];
+  const desk = (/\[pmc-endpoint\]\(!\)\n([\s\S]*?)\n\n/.exec(p) || [])[1];
+  assert.match(web, /^deny=0\.0\.0\.0\/0\.0\.0\.0$/m);
+  assert.match(web, /^permit=127\.0\.0\.1\/255\.255\.255\.255$/m);
+  assert.match(web, /^rtp_timeout=30$/m);
+  // control: desk phones register over TLS from the LAN and must NOT carry the loopback-only rule
+  assert.ok(desk, 'desk template found');
+  assert.doesNotMatch(desk, /permit=127\.0\.0\.1/);
+});
+
+test('the audio address is offered to the internet only when a public address is set, and the LAN one is kept', () => {
+  const base = Object.assign({}, cfg, { webrtcMediaAddress: undefined, admin: { host: '10.2.0.10' }, phoneSite: { host: '10.2.0.11' } });
+  assert.match(G.renderRtp(Object.assign({}, base, { webrtcPublicAddress: '103.144.157.235' })), /^10\.2\.0\.11 => 103\.144\.157\.235,include_local_address$/m);
+  // control: nothing set, nothing offered; a malformed address is not written into the engine's config either
+  assert.doesNotMatch(G.renderRtp(base), /=>/);
+  assert.doesNotMatch(G.renderRtp(Object.assign({}, base, { webrtcPublicAddress: 'phone.pmcne.ph' })), /=>/);
+});
+
+test('voicemail: a mailbox for every extension with voicemail on, a stable PIN, and *97 by endpoint', () => {
+  const d = V.normalizeDirectory(sample);
+  const secrets = { sip: {}, prov: {} };
+  G.ensureSecrets(d, secrets);
+  const vm = G.renderVoicemail(d, secrets);
+  assert.match(vm, /^\[pmc\]$/m);
+  const want = d.extensions.filter(e => e.voicemail);
+  assert.ok(want.length > 0, 'the sample has voicemail extensions');
+  for (const e of want) assert.match(vm, new RegExp('^' + e.ext + ' => \\d{6},', 'm'), e.ext);
+  for (const e of d.extensions.filter(x => !x.voicemail)) assert.doesNotMatch(vm, new RegExp('^' + e.ext + ' =>', 'm'), e.ext + ' has voicemail off');
+  assert.equal(G.voicemailPin(secrets.sip[want[0].ext]), G.voicemailPin(secrets.sip[want[0].ext]), 'stable');
+  assert.notEqual(G.voicemailPin('a'), G.voicemailPin('b'));
+  assert.match(G.renderDialplan(d, cfg), /^exten => \*97,1,VoiceMailMain\(\$\{CHANNEL\(endpoint\)\}@pmc,s\)$/m);
+  // a ';' in a name would cut the callerid line short: it never survives normalisation
+  assert.equal(V.normalizeExtension({ ext: '1000', name: 'Ward; 2' }).name, 'Ward 2');
 });
 
 test('secrets are created once and the rendered files carry them', () => {

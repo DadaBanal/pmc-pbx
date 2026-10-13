@@ -13,7 +13,8 @@ const { fakeDc } = require('./fake-dc');
 const ldap = require('../lib/ldap');
 const PU = require('../lib/phoneusers');
 const { loadConfig } = require('../lib/config');
-const { start } = require('../server');
+const { start, applyChanges } = require('../server');
+const { Store } = require('../lib/store');
 const auth = require('../lib/auth');
 
 const skip = haveOpenssl() ? false : 'openssl is not available to make a test certificate';
@@ -36,6 +37,8 @@ async function boot(extra) {
   const users = auth.loadUsers(env.cfg.usersFile);
   auth.setPassword(users, 'admin', 'AdminPassw0rd!', 'admin', 'test');
   auth.saveUsers(env.cfg.usersFile, users);
+  // a running PBX: the directory has been applied once, so a first sign-in may apply its own new phone
+  if (!(extra && extra.neverApplied)) assert.equal((await applyChanges(env.cfg, new Store(env.cfg), 'test')).ok, true);
   const srv = start(env.cfg, { log: () => {} });
   await listening(srv.adminServer); await listening(srv.publicServer); await listening(srv.phoneServer);
   const A = 'https://127.0.0.1:' + srv.adminServer.address().port;
@@ -92,10 +95,10 @@ test('the phone refuses every network it is not enabled on, and the admin screen
   const { A, F, stop } = await boot({ phoneNetworks: ['10.2.0.0/22'] }); // the tests connect from 127.0.0.1: not on it
   t.after(stop);
   let r = await request(F, 'GET', '/phone', { noCsrf: true });
-  assert.equal(r.status, 403); assert.match(r.text, /wired network/);
+  assert.equal(r.status, 403); assert.match(r.text, /not available on this network/);
   assert.equal((await request(A, 'GET', '/phone', { noCsrf: true })).status, 403);
   r = await signIn(A, 'ana.reyes', 'Right-Passw0rd');
-  assert.equal(r.status, 403); assert.match(r.json.error, /wired network/);
+  assert.equal(r.status, 403); assert.match(r.json.error, /not available on this network/);
   assert.equal(await upgrade(A, ''), 403);
   // control: the admin screen still answers from here, and an admin still signs in
   assert.equal((await request(A, 'GET', '/', { noCsrf: true })).status, 200);
@@ -199,7 +202,7 @@ test('phone users: Windows sign-in, their own list, a phone on first sign-in, sw
 });
 
 test('the phone site: no port, the phone only, never the admin screen', { skip, timeout: 60000 }, async t => {
-  const { F, stop } = await boot();
+  const { A, F, stop } = await boot();
   t.after(stop);
   let r = await request(F, 'GET', '/', { noCsrf: true });
   assert.equal(r.status, 302); assert.equal(r.headers.location, '/phone');
@@ -213,10 +216,83 @@ test('the phone site: no port, the phone only, never the admin screen', { skip, 
   const ben = r.cookie;
   assert.equal((await request(F, 'GET', '/api/softphone', { cookie: ben })).status, 200);
   assert.equal(await upgrade(F, ben), 502, 'through the gate (no engine here)');
-  // even an admin gets no admin API on the phone site
-  const adminC = (await signIn(F, 'admin', 'AdminPassw0rd!')).cookie;
+  // the phone site, reachable from the internet, never checks an admin-screen password (review 14 Oct 2026)
+  const onPhoneSite = await signIn(F, 'admin', 'AdminPassw0rd!');
+  assert.equal(onPhoneSite.status, 401); assert.equal(onPhoneSite.cookie, null);
+  // and an admin session made on the admin screen still gets no admin API there
+  const adminC = (await signIn(A, 'admin', 'AdminPassw0rd!')).cookie;
+  assert.ok(adminC, 'control: the same password works on the admin screen');
   assert.equal((await request(F, 'GET', '/api/users', { cookie: adminC })).status, 404);
   assert.equal((await request(F, 'GET', '/api/phone-users', { cookie: adminC })).status, 404);
   assert.equal((await request(F, 'GET', '/api/me', { cookie: adminC })).status, 200, 'control: the phone API does answer an admin here');
   assert.equal(await upgrade(F, ''), 401);
+});
+
+test('a first sign-in never pushes someone else\'s waiting changes live', { skip, timeout: 60000 }, async t => {
+  const { env, A, stop } = await boot();
+  t.after(stop);
+  const adminC = (await signIn(A, 'admin', 'AdminPassw0rd!')).cookie;
+  // an editor's change saved but not applied
+  assert.equal((await request(A, 'POST', '/api/extensions', { cookie: adminC, body: { name: 'Pending Desk', dept: 'Nursing', model: 'T31P', mac: '001565ccdd01' } })).status, 200);
+  const before = new Store(env.cfg).loadManifest().directoryVersion;
+  const r = await signIn(A, 'ben.cruz', 'Right-Passw0rd');
+  assert.equal(r.status, 200);
+  assert.equal(new Store(env.cfg).loadManifest().directoryVersion, before, 'nothing was applied');
+  assert.equal(PU.find(PU.load(env.cfg), 'ben.cruz').ext, r.json.ext, 'but the person is on the list with a number');
+  const sp = await request(A, 'GET', '/api/softphone', { cookie: r.cookie });
+  assert.equal(sp.status, 409); assert.match(sp.json.error, /not switched on/);
+  // control: on a clean directory the same first sign-in does apply
+  await request(A, 'POST', '/api/apply', { cookie: adminC });
+  const r2 = await signIn(A, 'ana.reyes', 'Right-Passw0rd');
+  assert.equal((await request(A, 'GET', '/api/softphone', { cookie: r2.cookie })).status, 200);
+});
+
+test('removing an extension someone is linked to is refused; removing the phone user takes both', { skip, timeout: 60000 }, async t => {
+  const { env, A, stop } = await boot();
+  t.after(stop);
+  const r = await signIn(A, 'ana.reyes', 'Right-Passw0rd');
+  const ext = r.json.ext;
+  const adminC = (await signIn(A, 'admin', 'AdminPassw0rd!')).cookie;
+  const del = await request(A, 'DELETE', '/api/extensions/' + ext, { cookie: adminC });
+  assert.equal(del.status, 409); assert.match(del.json.error, /phone user ana\.reyes/);
+  assert.equal(await upgrade(A, r.cookie), 502, 'control: still connected before removal (no engine here: 502 = through the gate)');
+  assert.equal((await request(A, 'DELETE', '/api/phone-users/ana.reyes', { cookie: adminC })).status, 200);
+  assert.equal(PU.find(PU.load(env.cfg), 'ana.reyes'), undefined);
+  assert.equal(new Store(env.cfg).loadDirectory().extensions.some(e => e.ext === ext), false, 'the browser phone went with them');
+  assert.equal((await request(A, 'GET', '/api/me', { cookie: r.cookie })).status, 401);
+});
+
+test('switching a phone user off closes the phone connection that is already open', { skip, timeout: 60000 }, async t => {
+  // an engine that accepts the WebSocket, so the connection stays open the way a live phone's does
+  const net = require('net');
+  const eng = net.createServer(s => { s.on('error', () => {}); s.once('data', d => {
+    const key = /sec-websocket-key:\s*(\S+)/i.exec(d.toString('latin1'))[1];
+    const CRLF = '\r\n';
+    s.write(['HTTP/1.1 101 Switching Protocols', 'Upgrade: websocket', 'Connection: Upgrade',
+      'Sec-WebSocket-Accept: ' + crypto.createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64'),
+      'Sec-WebSocket-Protocol: sip', '', ''].join(CRLF));
+  }); });
+  await new Promise(res => eng.listen(0, '127.0.0.1', res));
+  const { A, stop } = await boot({ asterisk: { command: [process.execPath, path.join(__dirname, 'fake-asterisk.js')], timeoutMs: 5000, wsHost: '127.0.0.1', wsPort: eng.address().port } });
+  t.after(() => { stop(); eng.close(); });
+  const r = await signIn(A, 'ana.reyes', 'Right-Passw0rd');
+  const adminC = (await signIn(A, 'admin', 'AdminPassw0rd!')).cookie;
+  const sock = await new Promise((resolve, reject) => {
+    const u = new URL('/ws', A);
+    const req = https.request({ hostname: u.hostname, port: u.port, path: '/ws', method: 'GET', rejectUnauthorized: false, headers: {
+      Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64'),
+      'Sec-WebSocket-Protocol': 'sip', Origin: A, Cookie: r.cookie } });
+    req.on('upgrade', (res, s) => resolve(s));
+    req.on('response', res => { res.resume(); reject(new Error('no upgrade: ' + res.statusCode)); });
+    req.on('error', reject);
+    req.end();
+  });
+  let closed = false;
+  sock.on('close', () => { closed = true; }); sock.on('error', () => {});
+  await new Promise(res => setTimeout(res, 100));
+  assert.equal(closed, false, 'control: the open phone connection stays open while the user is on');
+  assert.equal((await request(A, 'PUT', '/api/phone-users/ana.reyes', { cookie: adminC, body: { disabled: true } })).status, 200);
+  const t0 = Date.now();
+  while (!closed && Date.now() - t0 < 3000) await new Promise(res => setTimeout(res, 20));
+  assert.equal(closed, true, 'switching off closed the connection that was already open');
 });

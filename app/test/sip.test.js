@@ -82,10 +82,14 @@ function harness(opts) {
   const server = {
     got,
     connect() {
+      server.connections = (server.connections || 0) + 1;
       ws = {
         sent: [], readyState: 1,
         send(text) {
           const m = SIP.parse(text); got.push(m);
+          if (m.method === 'REGISTER') server.regs = (server.regs || 0) + 1;
+          if (m.method === 'REGISTER' && opts.regFail && server.regs <= opts.regFail) return reply(m, 503, 'Service Unavailable');
+          if (m.method === 'REGISTER' && server.silent) return undefined; // a dead engine: the request is never answered
           if (m.method === 'REGISTER') return authorised(m, 'REGISTER') ? reply(m, 200, 'OK', [['Contact', m.headers.contact[0] + ';expires=300']]) : reply(m, 401, 'Unauthorized', [challenge]);
           if (m.method === 'INVITE' && !SIP.tagOf(m.headers.to[0])) {
             if (!authorised(m, 'INVITE')) return reply(m, 401, 'Unauthorized', [challenge]);
@@ -167,6 +171,16 @@ test('a wrong password ends in "denied" after one try, not a loop', async () => 
   assert.equal(srv.got.filter(m => m.method === 'REGISTER').length, 2, 'stopped after the authorised retry failed');
 });
 
+test('a refused password is tried again later, slowly, so a phone recovers once the engine knows it', async () => {
+  const srv = harness({ password: 'the-real-one' });
+  const ua = new SIP.UA({ ext: '1201', password: 'not-it', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media: fakeMedia(), deniedRetryMs: 40 });
+  ua.start();
+  await until(() => ua.state === 'denied');
+  await until(() => srv.got.filter(m => m.method === 'REGISTER').length >= 4, 2000);
+  assert.equal(ua.state, 'denied', 'still denied: the password is still wrong');
+  await ua.stop();
+});
+
 test('a busy number ends the call with "busy" and ACKs the 486', async () => {
   const srv = harness({ password: 'pw-1234567', busy: true });
   const ua = new SIP.UA({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media: fakeMedia() });
@@ -207,5 +221,123 @@ test('incoming: rings with 180, answers with 200 and SDP, ends on the far end\'s
   assert.ok(srv.got.some(m => m.status === 200 && /BYE/.test(m.headers.cseq[0])), 'BYE answered');
   srv.push('OPTIONS sip:abc@x.invalid SIP/2.0\r\nVia: SIP/2.0/WS 127.0.0.1:8088;branch=z9hG4bKopt\r\nFrom: <sip:asterisk@pbx>;tag=q\r\nTo: <sip:1201@pbx>\r\nCall-ID: q-1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n');
   await until(() => srv.got.some(m => m.status === 200 && /OPTIONS/.test(m.headers.cseq[0])));
+  await ua.stop();
+});
+
+// ------------------------------------------------------------------------------------------- review fixes, 14 Oct 2026
+// an incoming INVITE from the scripted engine, and the CANCEL / ACK that belong to it
+const inviteText = id => 'INVITE sip:abc@x.invalid;transport=ws SIP/2.0\r\nVia: SIP/2.0/WS 127.0.0.1:8088;branch=z9hG4bK' + id + '\r\n' +
+  'From: "Ward 2" <sip:1202@pbx>;tag=caller\r\nTo: <sip:1201@pbx>\r\nCall-ID: ' + id + '\r\nCSeq: 10 INVITE\r\nContact: <sip:asterisk@127.0.0.1:8088;transport=ws>\r\n' +
+  'Content-Type: application/sdp\r\nContent-Length: 10\r\n\r\nv=0\r\ns=-\r\n';
+const cancelText = id => 'CANCEL sip:abc@x.invalid;transport=ws SIP/2.0\r\nVia: SIP/2.0/WS 127.0.0.1:8088;branch=z9hG4bK' + id + '\r\n' +
+  'From: "Ward 2" <sip:1202@pbx>;tag=caller\r\nTo: <sip:1201@pbx>\r\nCall-ID: ' + id + '\r\nCSeq: 10 CANCEL\r\nContent-Length: 0\r\n\r\n';
+const ackText = (id, tag) => 'ACK sip:abc@x.invalid SIP/2.0\r\nVia: SIP/2.0/WS 127.0.0.1:8088;branch=z9hG4bK' + id + 'a\r\nFrom: "Ward 2" <sip:1202@pbx>;tag=caller\r\n' +
+  'To: <sip:1201@pbx>;tag=' + tag + '\r\nCall-ID: ' + id + '\r\nCSeq: 10 ACK\r\nContent-Length: 0\r\n\r\n';
+// media whose microphone takes as long as the test says, so a call can be caught while it is "connecting"
+const slowMedia = () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const m = fakeMedia();
+  const create = m.create;
+  m.create = async () => { await gate; return create(); };
+  m.release = release;
+  return m;
+};
+const finals = (srv, id) => srv.got.filter(x => x.status >= 200 && x.headers['call-id'][0] === id && /INVITE/.test(x.headers.cseq[0])).map(x => x.status);
+
+async function ringingCall(srv, ua, id) {
+  let c = null;
+  ua.on('incoming', x => { if (x.callId === id) c = x; });
+  srv.push(inviteText(id));
+  await until(() => c);
+  return c;
+}
+
+test('hanging up while an incoming call is still connecting refuses it with 603, sends no 200 and no BYE', async () => {
+  const srv = harness({ password: 'pw-1234567' }); const media = slowMedia();
+  const ua = new SIP.UA({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media });
+  ua.start(); await until(() => ua.state === 'registered');
+  const c = await ringingCall(srv, ua, 'conn-hang');
+  const answering = c.answer();
+  await until(() => c.state === 'connecting');
+  c.hangup();
+  media.release(); await answering;
+  await new Promise(r => setTimeout(r, 30));
+  assert.deepEqual(finals(srv, 'conn-hang'), [603]);
+  assert.equal(srv.got.filter(m => m.method === 'BYE').length, 0, 'no BYE on a dialog that never existed');
+  await ua.stop();
+});
+
+test('a CANCEL that arrives while the call is connecting ends it with 487 and no 200', async () => {
+  const srv = harness({ password: 'pw-1234567' }); const media = slowMedia();
+  const ua = new SIP.UA({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media });
+  ua.start(); await until(() => ua.state === 'registered');
+  const c = await ringingCall(srv, ua, 'conn-cancel');
+  const answering = c.answer();
+  await until(() => c.state === 'connecting');
+  srv.push(cancelText('conn-cancel'));
+  media.release(); await answering;
+  await new Promise(r => setTimeout(r, 30));
+  assert.deepEqual(finals(srv, 'conn-cancel'), [487]);
+  assert.equal(c.reason, 'missed');
+  await ua.stop();
+});
+
+test('hanging up after answering but before the ACK holds the BYE until the ACK arrives', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = new SIP.UA({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media: fakeMedia() });
+  ua.start(); await until(() => ua.state === 'registered');
+  const c = await ringingCall(srv, ua, 'pre-ack');
+  await c.answer();
+  assert.deepEqual(finals(srv, 'pre-ack'), [200]);
+  c.hangup();
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(srv.got.filter(m => m.method === 'BYE').length, 0, 'no BYE before the ACK (RFC 3261 section 15)');
+  srv.push(ackText('pre-ack', c.localTag));
+  await until(() => srv.got.some(m => m.method === 'BYE'));
+  await ua.stop();
+});
+
+test('a refused REGISTER (503) is retried instead of leaving the phone dead', async () => {
+  const srv = harness({ password: 'pw-1234567', regFail: 1 });
+  const ua = new SIP.UA({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media: fakeMedia(), retryMs: 50 });
+  const states = [];
+  ua.on('state', s => states.push(s));
+  ua.start();
+  await until(() => ua.state === 'registered');
+  assert.ok(states.includes('failed'), 'it did go through failed first');
+  await ua.stop();
+});
+
+test('a REGISTER that is never answered drops the connection and registers again on a new one', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = new SIP.UA({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media: fakeMedia(), regTimeoutMs: 60 });
+  ua.start(); await until(() => ua.state === 'registered');
+  assert.equal(srv.connections, 1);
+  srv.silent = true;
+  ua.register();
+  await until(() => ua.state === 'offline' || ua.state === 'connecting');
+  srv.silent = false;
+  await until(() => ua.state === 'registered' && srv.connections === 2, 4000);
+  await ua.stop();
+});
+
+test('a challenge that arrives after the caller hung up does not ring the far end again', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = new SIP.UA({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media: fakeMedia() });
+  ua.start(); await until(() => ua.state === 'registered');
+  // hold back the engine's 401 until the caller has hung up
+  const ws = ua.ws; const orig = ws.send.bind(ws); let held = null;
+  ws.send = text => { if (/^INVITE /.test(text) && !/Authorization:/i.test(text)) { held = text; srv.got.push(SIP.parse(text)); return; } return orig(text); };
+  const call = await ua.call('1203');
+  await until(() => held);
+  call.hangup();
+  const inv = SIP.parse(held);
+  const h = inv.headers.via.map(v => ['Via', v]);
+  h.push(['To', inv.headers.to[0] + ';tag=late'], ['From', inv.headers.from[0]], ['Call-ID', inv.headers['call-id'][0]], ['CSeq', inv.headers.cseq[0]],
+    ['WWW-Authenticate', 'Digest realm="asterisk", nonce="late", qop="auth", algorithm=MD5']);
+  ws.onmessage({ data: SIP.build('SIP/2.0 401 Unauthorized', h, '') });
+  await new Promise(r => setTimeout(r, 40));
+  assert.equal(srv.got.filter(m => m.method === 'INVITE').length, 1, 'no second INVITE after the hang-up');
   await ua.stop();
 });

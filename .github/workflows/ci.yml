@@ -121,6 +121,9 @@ jobs:
           # the VM layout: secrets 0700 for the app only; tls readable by the engine's group; out/asterisk group asterisk, setgid
           mkdir -p /etc/pmc-pbx/secrets /etc/pmc-pbx/tls /var/lib/pmc-pbx/out/asterisk /var/lib/pmc-pbx/out/phones
           cp app/sample/config.json /etc/pmc-pbx/config.json
+          # engine and test client share this container, so the browser phone's media address is loopback here, and
+          # only here; on the VM it is the phone site's LAN address (validation refuses a webphone with none)
+          node -e "const f='/etc/pmc-pbx/config.json',c=JSON.parse(require('fs').readFileSync(f,'utf8'));c.webrtcMediaAddress='127.0.0.1';require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
           cp app/sample/directory.json /etc/pmc-pbx/directory.json
           openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj '/CN=pbx.test' \
             -keyout /etc/pmc-pbx/tls/key.pem -out /etc/pmc-pbx/tls/cert.pem 2>/dev/null
@@ -129,7 +132,7 @@ jobs:
           chmod 2750 /var/lib/pmc-pbx/out/asterisk
           node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out
           ls -ln /var/lib/pmc-pbx/out/asterisk
-          cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf /etc/asterisk/
+          cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf asterisk/conf/voicemail.conf /etc/asterisk/
           chown -R asterisk:asterisk /etc/asterisk /var/run/asterisk
           /usr/sbin/asterisk -U asterisk -G asterisk
           for i in 1 2 3 4 5 6 7 8 9 10; do /usr/sbin/asterisk -rx 'core show version' >/dev/null 2>&1 && break; sleep 2; done
@@ -141,7 +144,9 @@ jobs:
           node app/test/ci-assert.js endpoints "$PMC_DIR" /tmp/ep.txt
           /usr/sbin/asterisk -rx 'dialplan show pmc-internal' | tee /tmp/dp.txt
           node app/test/ci-assert.js dialplan "$PMC_DIR" /tmp/dp.txt
-          echo "engine loaded the generated config: transport, every endpoint, dialplan"
+          /usr/sbin/asterisk -rx 'voicemail show users for pmc' | tee /tmp/vm.txt
+          grep -q '^pmc ' /tmp/vm.txt || { echo "no [pmc] mailboxes loaded"; exit 1; }
+          echo "engine loaded the generated config: transport, every endpoint, dialplan, mailboxes"
 
       - name: the admin screen adds a phone, applies it, the engine shows it, the phone fetches its config
         run: |

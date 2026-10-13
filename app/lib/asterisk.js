@@ -14,7 +14,7 @@ function run(cfg, cli) {
 
 async function reload(cfg) {
   const steps = [];
-  for (const cli of ['pjsip reload', 'dialplan reload']) {
+  for (const cli of ['pjsip reload', 'dialplan reload', 'module reload app_voicemail.so', 'module reload res_rtp_asterisk.so']) {
     const r = await run(cfg, cli);
     steps.push({ cli, ok: r.ok, out: (r.stdout + r.stderr).trim().slice(0, 500) });
     if (!r.ok) return { ok: false, steps, error: r.error };

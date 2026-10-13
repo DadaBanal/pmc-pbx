@@ -25,7 +25,9 @@ function add(cfg, store, sam, name, group, who) {
   if (have) return { user: have, created: false };
   const dept = (cfg.ad && cfg.ad.dept) || 'ICT';
   const dir = V.normalizeDirectory(store.loadDirectory());
-  const e = V.normalizeExtension({ name: String(name || sam).slice(0, 60), dept, model: 'webphone', voicemail: true });
+  if (!dir.departments.some(d => d.name === dept)) throw new Error('department ' + dept + ' is not set up in the directory');
+  // 40 is the directory's limit; a longer Windows display name used to fail every sign-in with 409 (review 14 Oct)
+  const e = V.normalizeExtension({ name: String(name || sam).replace(/[;"]/g, ' ').trim().slice(0, 40).trim() || sam, dept, model: 'webphone', voicemail: true });
   e.ext = V.nextFreeExt(dir, dept) || '';
   if (!e.ext) throw new Error('no free extension in department ' + dept);
   dir.extensions.push(e);
@@ -48,4 +50,22 @@ function update(cfg, sam, fields) {
   return u;
 }
 
-module.exports = { load, save, find, add, update, SAM_RE };
+// Take someone off the list for good, with their browser phone. Switching off keeps both; this removes both.
+function remove(cfg, store, sam, who) {
+  const data = load(cfg);
+  const u = find(data, sam);
+  if (!u) return null;
+  data.users = data.users.filter(x => x !== u);
+  save(cfg, data);
+  const dir = V.normalizeDirectory(store.loadDirectory());
+  const e = dir.extensions.find(x => x.ext === u.ext && x.model === 'webphone');
+  if (e) {
+    dir.extensions = dir.extensions.filter(x => x !== e);
+    for (const x of dir.extensions) x.keys = x.keys.filter(k => k.ext !== e.ext);
+    store.saveDirectory(dir, who, 'remove extension', e.ext + ' ' + e.name + ' (phone user ' + sam + ' removed)');
+  }
+  store.audit({ who, action: 'remove phone user', detail: sam + (e ? ' and extension ' + e.ext : '') });
+  return { user: u, ext: e ? e.ext : null };
+}
+
+module.exports = { load, save, find, add, update, remove, SAM_RE };

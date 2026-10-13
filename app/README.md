@@ -69,13 +69,17 @@ sudo chgrp asterisk /etc/pmc-pbx/tls /etc/pmc-pbx/tls/cert.pem /etc/pmc-pbx/tls/
 sudo chmod 0750 /etc/pmc-pbx/tls && sudo chmod 0640 /etc/pmc-pbx/tls/cert.pem /etc/pmc-pbx/tls/key.pem
 sudo chmod 2750 /var/lib/pmc-pbx/out/asterisk         # setgid: generated includes inherit group asterisk
 sudo usermod -aG asterisk pmcpbx
-echo 'pmcpbx ALL=(root) NOPASSWD: /usr/sbin/asterisk -rx *' | sudo tee /etc/sudoers.d/pmc-pbx
-# the engine's own config: the repo's files carry the #include lines for the generated output. Same four files CI
+# The app talks to the engine through its control socket, as group asterisk, with NO sudo: pmc-pbx.service runs with
+# NoNewPrivileges=true, which blocks sudo outright (14 Oct 2026: Apply from the screen failed with "no new
+# privileges" until this). In /etc/asterisk/asterisk.conf, uncomment [files] and set:
+#   astctlpermissions = 0660   astctlowner = asterisk   astctlgroup = asterisk   astctl = asterisk.ctl
+# and in /etc/pmc-pbx/config.json: "asterisk": { "command": ["/usr/sbin/asterisk"] }
+# the engine's own config: the repo's files carry the #include lines for the generated output. Same five files CI
 # installs. ari.conf stays OUT: it is a template with a placeholder password, and the app does not use ARI.
 sudo -u pmcpbx node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out   # as pmcpbx: root would leave root-owned output
-for f in pjsip extensions rtp http; do sudo cp -p /etc/asterisk/$f.conf /etc/asterisk/$f.conf.sample-$(date +%Y%m%d) 2>/dev/null; done
-sudo cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf /etc/asterisk/
-sudo chown asterisk:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf /etc/asterisk/rtp.conf /etc/asterisk/http.conf
+for f in pjsip extensions rtp http voicemail; do sudo cp -p /etc/asterisk/$f.conf /etc/asterisk/$f.conf.sample-$(date +%Y%m%d) 2>/dev/null; done
+sudo cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf asterisk/conf/voicemail.conf /etc/asterisk/
+sudo chown asterisk:asterisk /etc/asterisk/pjsip.conf /etc/asterisk/extensions.conf /etc/asterisk/rtp.conf /etc/asterisk/http.conf /etc/asterisk/voicemail.conf
 sudo systemctl restart asterisk
 sudo asterisk -rx 'pjsip show transports' | grep -q 'transport-tls' && echo 'TLS transport loaded' || echo 'TLS transport MISSING'
 sudo -u pmcpbx PMC_PBX_CONF=/etc/pmc-pbx node app/admin.js adduser dada admin
@@ -137,12 +141,25 @@ only in Azure Virtual Desktop, Windows 365 and Dev Box.
 Dada, 13 Oct 2026, *"why does it need to be gpo"*. (If it is ever wanted, Edge's `WebAppInstallForceList` installs it
 silently and `WebAppSettings` `run_on_os_login` opens it at sign-in; both Windows only.)
 
-### Where it works: the Default network only
+### Where it works: any network with internet, and nothing else is exposed
 
-Dada, 13 Oct 2026: *"only enable it on the default network"*. `phoneNetworks` in config.json (`["10.2.0.0/22"]` on
-PMC-PBX01) is the list. From anywhere else the phone site, `/phone`, phone sign-in, `/api/softphone` and `/ws` answer
-403 "PMC Phone works only on the hospital's wired network." The admin screen is not affected. So the two Wi-Fi
-networks (10.69.68.0/22, 10.17.80.0/22) and mobile phones on them are out, by decision, not by accident.
+Dada, 14 Oct 2026: *"from now on it should work with any network even mobile networks"*, then *"it should work as
+long as there is an internet connection but no backdoors to anything else"*. This REPLACES his 13 Oct ruling, *"only
+enable it on the default network"*. `phoneNetworks` is left out of config.json on PMC-PBX01 (the feature stays: when it
+is set, the phone site, `/phone`, phone sign-in, `/api/softphone`, `/api/phonebook` and `/ws` answer only those networks).
+
+What makes "any network, no backdoors" true:
+
+| Piece | What it does |
+|---|---|
+| UDM port forward (Dada makes it in the UniFi UI) | one spare public address, **103.144.157.235**, forwards TCP 443 and UDP 10000-10999 to **10.2.0.11** only. Nothing to 8443, 5061 or 22. Public DNS `phone.pmcne.ph` -> .235 |
+| `webrtcPublicAddress` | `"103.144.157.235"`: generated into `rtp_pmc.conf` as `[ice_host_candidates] 10.2.0.11 => 103.144.157.235,include_local_address` (syntax from Asterisk's own configs/samples/rtp.conf.sample), so phones outside are offered the public address and phones inside still go direct |
+| webphone endpoints | `deny=0.0.0.0/0.0.0.0`, `permit=127.0.0.1`: a browser phone's password works only through the app's `/ws` gate, never straight on 5061 (CI proves it, with a desk phone on 5061 as the control) |
+| host firewall `vm/nftables-pmc-pbx.nft` | in: 10.2.0.11 443 and the audio ports from anywhere; ssh, 8443, provisioning and 5061 from the hospital only. out: audio; the engine to LAN phones; LDAPS to DND-AD01 only; DNS; time; updates and git to the internet only. **No new connection from this box into the LAN**: a compromised PBX is not a way in. Load with `sudo bash vm/firewall.sh apply` (rolls itself back in 5 minutes) and `confirm` once checked |
+| sign-in | 5 failures per name in 15 minutes and that name cools down, whatever address it comes from (AD lockout is OFF on this domain, so this is the only cap); 20 per address. The phone site never checks an admin-screen password |
+
+Not yet: a TURN relay for the few networks that block UDP entirely; reconnecting a call in progress when a phone moves
+between Wi-Fi and mobile data (the call ends; the phone re-registers on its own).
 
 ### The phone site: no port in the address
 
@@ -161,8 +178,9 @@ admin-screen account signs in with their Windows name and password (`jdoe`, `PMC
 |---|---|
 | password | a simple bind to the domain controller as that person, over LDAPS, on a **pinned** certificate: DND-AD01's is self-signed (`CN=DND-AD01`, to 2031), so the SHA-256 fingerprint in `ad.pin` is the whole trust decision. An empty password is refused before anything is sent (AD treats it as an anonymous bind and says yes) |
 | group | `ad.groups` (e.g. `["PMO Team"]`), nested membership included (`LDAP_MATCHING_RULE_IN_CHAIN`), checked at **every** sign-in |
-| the list | `phone-users.json`, separate from the admin accounts. First sign-in adds the person with a browser phone in `ad.dept` and reloads the engine |
-| switching off | Users page, *Phone users (Windows sign-in)*: **Switch off** ends their session and their phone connection at once, even while they stay in the group |
+| the list | `phone-users.json`, separate from the admin accounts. First sign-in adds the person with a browser phone in `ad.dept`; the engine is reloaded only if nothing else is waiting, so a sign-in never pushes an editor's unapplied changes live |
+| switching off | Users page, *Phone users (Windows sign-in)*: **Switch off** ends their session and closes their open phone connection at once, even while they stay in the group; a sweep every 30 s closes any connection whose session stopped being valid |
+| removing | **Remove** takes the person and their browser phone off; *Apply changes* afterwards. An extension someone is linked to cannot be deleted on the Phones page (the next person given that number would otherwise inherit their sign-in) |
 
 `node admin.js phoneuser <windows-name> <display name...>` puts someone on the list ahead of their first sign-in;
 `node admin.js phoneusers` lists it. Their password is never stored here: the domain controller checks it each time.
@@ -177,6 +195,13 @@ Proven by `test/ad.test.js` against `test/fake-dc.js`, a stand-in directory on a
 by bind, the group, locked and unknown accounts, an empty password and a wrong certificate that never reach it, the
 list, first-sign-in extension, switching off, the phone site's limits and the network rule. Each protection was
 broken on purpose once and a test failed.
+
+## Voicemail
+
+Every extension with voicemail on has a mailbox (`voicemail_pmc.conf`, context `[pmc]`, generated on Apply;
+`asterisk/conf/voicemail.conf` includes it). Unanswered or busy calls go to it; *97 from your own phone plays your
+messages without a PIN (the dialplan uses the authenticated endpoint, not the caller ID). Until 14 Oct 2026 there were
+no mailboxes and every unanswered call dropped the caller.
 
 ## Not built yet
 

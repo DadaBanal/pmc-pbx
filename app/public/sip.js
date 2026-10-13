@@ -145,6 +145,9 @@
       this.connectFn = o.connect; this.media = o.media;
       this.log = o.log || (() => {});
       this.expires = o.expires || 300;
+      this.retryMs = o.retryMs || 60000;          // after a refused REGISTER
+      this.regTimeoutMs = o.regTimeoutMs || 32000; // REGISTER with no final answer: the connection is dead
+      this.deniedRetryMs = o.deniedRetryMs || 120000; // a refused password is tried again, slowly
       this.handlers = {};
       this.host = rand(12) + '.invalid';
       this.contact = '<sip:' + rand(8) + '@' + this.host + ';transport=ws>';
@@ -176,7 +179,7 @@
       for (const c of this.calls.values()) c.ended('the connection to the phone system dropped');
       this.tx.clear();
       if (this.state !== 'denied') this.setState('offline', why);
-      if (!this.stopped && this.state !== 'denied') { setTimeout(() => { if (!this.stopped) this.connect(); }, this.backoff); this.backoff = Math.min(this.backoff * 2, 30000); }
+      if (!this.stopped) { setTimeout(() => { if (!this.stopped) this.connect(); }, this.backoff); this.backoff = Math.min(this.backoff * 2, 30000); }
     }
     async stop() {
       this.stopped = true;
@@ -232,13 +235,32 @@
       const aor = '<sip:' + this.ext + '@' + this.domain + '>';
       const r = this.request('REGISTER', ruri, Object.assign({ to: aor, from: aor + ';tag=' + this.reg.tag, callId: this.reg.callId, cseq: this.reg.cseq,
         contact: this.contact, expires: String(expires) }, auth || {}));
-      this.tx.set(r.branch, { method: 'REGISTER', expires, authed: !!auth, onResponse: res => this.onRegister(res, expires, ruri, !!auth) });
+      const ws = this.ws;
+      const t = { method: 'REGISTER', expires, authed: !!auth, onResponse: res => { clearTimeout(t.timer); this.onRegister(res, expires, ruri, !!auth); } };
+      // no final answer in 32 s (RFC 3261 timer F): the connection is dead even if the socket says otherwise.
+      // Close it; the reconnect path registers again. Review 14 Oct 2026: the screen said Ready while it expired.
+      t.timer = setTimeout(() => {
+        if (!this.tx.has(r.branch)) return;
+        this.tx.delete(r.branch);
+        this.log('REGISTER got no answer; reconnecting');
+        if (this.ws === ws && ws) { try { ws.close(); } catch (e) { /* closing anyway */ } this.lost('the phone system stopped answering'); }
+      }, this.regTimeoutMs);
+      if (typeof t.timer === 'object' && t.timer.unref) t.timer.unref();
+      this.tx.set(r.branch, t);
       this.send(r.text);
     }
     onRegister(res, expires, ruri, authed) {
       if (res.status < 200) return;
       if (res.status === 401 || res.status === 407) {
-        if (authed) { this.setState('denied', 'the phone system did not accept this phone\'s password'); this.stopped = true; return; }
+        // refused after the challenge: wrong password, or (14 Oct 2026, kevin.cadano) an extension the engine had not
+        // loaded yet. Try again every 2 minutes instead of stopping for good, so the phone recovers on its own.
+        if (authed) {
+          this.setState('denied', 'the phone system did not accept this phone\'s password');
+          clearTimeout(this.reg.timer);
+          this.reg.timer = setTimeout(() => { if (!this.stopped && this.ws) this.register(); }, this.deniedRetryMs);
+          if (typeof this.reg.timer === 'object' && this.reg.timer.unref) this.reg.timer.unref();
+          return;
+        }
         return this.register(expires, this.authFor(res, 'REGISTER', ruri));
       }
       if (res.status >= 200 && res.status < 300) {
@@ -251,7 +273,11 @@
         this.setState('registered');
         return;
       }
+      // any other refusal (403, 408, 5xx) is retried a minute later instead of leaving the phone dead until reload
       this.setState('failed', 'registration refused: ' + res.status + ' ' + res.reason);
+      clearTimeout(this.reg.timer);
+      this.reg.timer = setTimeout(() => { if (!this.stopped && this.ws) this.register(); }, this.retryMs);
+      if (typeof this.reg.timer === 'object' && this.reg.timer.unref) this.reg.timer.unref();
     }
 
     // -------------------------------------------------------------- everything that arrives
@@ -278,7 +304,7 @@
         case 'ACK': if (call) call.onAck(msg); return;
         case 'CANCEL': {
           this.respond(msg, 200, 'OK');
-          if (call && call.dir === 'in' && call.state === 'ringing') call.cancelled();
+          if (call && call.dir === 'in' && (call.state === 'ringing' || call.state === 'connecting')) call.cancelled();
           return;
         }
         case 'BYE':
@@ -354,11 +380,13 @@
       this.ua.tx.set(r.branch, { method: 'INVITE', onResponse: res => this.onInviteResponse(res, !!auth, r.branch) });
       this.ua.send(r.text);
     }
-    ackFailure(res, branch) {
-      // ACK for a non-2xx final response: same branch and CSeq number, To as the response carried it
+    ackFailure(res, branch, ruri) {
+      // ACK for a non-2xx final response: same branch, CSeq number and Request-URI as the request it answers.
+      // An incoming call has no this.ruri: a failed re-INVITE (hold) was sent to the remote target.
+      const target = ruri || this.ruri || this.remoteTarget;
       const ackHeaders = [['Via', 'SIP/2.0/WS ' + this.ua.host + ';branch=' + branch], ['Max-Forwards', '70'], ['To', hdr(res, 'to')],
         ['From', this.localUri], ['Call-ID', this.callId], ['CSeq', cseqOf(res).n + ' ACK']];
-      this.ua.send(build('ACK ' + this.ruri + ' SIP/2.0', ackHeaders, ''));
+      this.ua.send(build('ACK ' + target + ' SIP/2.0', ackHeaders, ''));
     }
     async onInviteResponse(res, authed, branch) {
       if (res.status === 100) return;
@@ -382,8 +410,9 @@
         this.set('active');
         return;
       }
-      this.ackFailure(res, branch);
-      if ((res.status === 401 || res.status === 407) && !authed) {
+      this.ackFailure(res, branch, this.ruri);
+      // a challenge that arrives after the caller hung up must not ring the far end again
+      if ((res.status === 401 || res.status === 407) && !authed && this.state !== 'ended') {
         this.cseq++;
         return this.sendInvite(this.offer, this.ua.authFor(res, 'INVITE', this.ruri));
       }
@@ -418,7 +447,7 @@
         send();
         // a 2xx is retransmitted until the ACK arrives, even over a reliable transport (RFC 3261 13.3.1.4)
         let wait = 500, spent = 0;
-        const again = () => { if (this.state !== 'active' || this.acked) return; spent += wait; if (spent > 32000) { this.ended('the phone system never confirmed the answer'); this.sendBye(); return; } send(); wait = Math.min(wait * 2, 4000); this.okTimer = setTimeout(again, wait); };
+        const again = () => { if ((this.state !== 'active' && !this.byeAfterAck) || this.acked) return; spent += wait; if (spent > 32000) { this.ended('the phone system never confirmed the answer'); this.sendBye(); return; } send(); wait = Math.min(wait * 2, 4000); this.okTimer = setTimeout(again, wait); };
         this.okTimer = setTimeout(again, wait);
         this.startedAt = Date.now();
         this.set('active');
@@ -433,7 +462,7 @@
       this.ended('declined');
     }
     cancelled() { this.ua.respond(this.invite, 487, 'Request Terminated', { toTag: this.localTag }); this.ended('missed'); }
-    onAck() { this.acked = true; clearTimeout(this.okTimer); }
+    onAck() { this.acked = true; clearTimeout(this.okTimer); if (this.byeAfterAck) { this.byeAfterAck = false; this.sendBye(); } }
     async onReinvite(req) {
       // the far end changed the media: hold music, resume, a codec change
       this.remoteCseq = cseqOf(req).n;
@@ -453,7 +482,15 @@
         this.ended('cancelled');
         return;
       }
-      if (this.state === 'active' || this.state === 'connecting') this.sendBye();
+      if (this.dir === 'in' && this.state === 'connecting') {
+        // the 200 has not gone out yet (answer() checks for this before sending it): refuse the INVITE instead
+        this.ua.respond(this.invite, 603, 'Decline', { toTag: this.localTag });
+        this.ended('hung up');
+        return;
+      }
+      // RFC 3261 15: the callee may not send BYE until its 200 is acknowledged; send it when the ACK arrives
+      if (this.dir === 'in' && this.state === 'active' && !this.acked) { this.byeAfterAck = true; this.ended('hung up'); return; }
+      if (this.state === 'active') this.sendBye();
       this.ended('hung up');
     }
     async hold(on) {
@@ -468,7 +505,7 @@
             this.ua.send(ack.text);
             try { await this.session.setAnswer(res.body); } catch (e) { /* keep the call */ }
             this.held = !!on;
-          } else { this.ackFailure(res, branch); this.session.setDirection(this.held ? 'sendonly' : 'sendrecv'); }
+          } else { this.ackFailure(res, branch, this.remoteTarget); this.session.setDirection(this.held ? 'sendonly' : 'sendrecv'); }
           this.ua.emit('update', this);
           resolve();
         });
@@ -483,7 +520,8 @@
       clearTimeout(this.okTimer);
       if (this.session) { try { this.session.close(); } catch (e) { /* already closed */ } }
       this.set('ended');
-      this.ua.calls.delete(this.callId);
+      if (this.byeAfterAck) setTimeout(() => this.ua.calls.delete(this.callId), 32000); // keep it to catch the ACK
+      else this.ua.calls.delete(this.callId);
     }
   }
 

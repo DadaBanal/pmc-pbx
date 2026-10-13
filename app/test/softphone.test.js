@@ -118,7 +118,7 @@ test('browser phone: role, credentials, phone book, linking, and the /ws gate', 
 
   // credentials: not before Apply creates the password, then exactly this extension's
   r = await request(A, 'GET', '/api/softphone', { cookie: nurseC });
-  assert.equal(r.status, 409); assert.match(r.json.error, /Apply/);
+  assert.equal(r.status, 409); assert.match(r.json.error, /not switched on/);
   r = await request(A, 'POST', '/api/apply', { cookie: adminC });
   assert.equal(r.status, 200, r.text);
   r = await request(A, 'GET', '/api/softphone', { cookie: nurseC });

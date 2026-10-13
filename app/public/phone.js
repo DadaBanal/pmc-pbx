@@ -113,7 +113,7 @@
     $('#status-text').textContent = text;
     el.title = why || '';
     if (state === 'registered') say('Your phone is ready. Calls to ' + S.creds.ext + ' ring here.');
-    if (state === 'denied') { say('The phone system did not accept this phone. Ask ICT.', true); toast('The phone system did not accept this phone\'s password. Ask ICT to check extension ' + S.creds.ext + '.', 'bad'); }
+    if (state === 'denied') { say('The phone system did not accept this phone. Ask PMO ICT.', true); toast('The phone system did not accept this phone\'s password. Ask PMO ICT to check extension ' + S.creds.ext + '.', 'bad'); }
   }
 
   // ------------------------------------------------------------------ sign in
@@ -141,7 +141,7 @@
       '<span class="sep">&middot;</span><button type="button" class="iconbtn" id="theme" aria-label="Switch light or dark" title="Light or dark (t)">' + icon('sun') + '</button>' +
       '<span class="sep">&middot;</span><a href="#" id="out">Sign out</a>';
     $('#theme').onclick = toggleTheme;
-    $('#out').onclick = async ev => { ev.preventDefault(); if (S.ua) await S.ua.stop(); try { await api('POST', '/api/logout'); } catch (e) { /* already out */ } location.reload(); };
+    $('#out').onclick = async ev => { ev.preventDefault(); if (S.ua) await S.ua.stop(); store.set(RECENT, '[]'); try { await api('POST', '/api/logout'); } catch (e) { /* already out */ } location.reload(); };
     $('#main').innerHTML =
       '<div class="phone-grid">' +
       '<section class="card dialer" aria-labelledby="dial-h"><h3 id="dial-h">' + icon('phone') + 'Your phone, ' + esc(c.ext) + '</h3>' +
@@ -261,7 +261,7 @@
       case 'not found': return 'No one has the number ' + c.number + '. Check it in the phone book.';
       case 'not answering': return who + ' did not answer, or their phone is not connected.';
       case 'the microphone is blocked for this page': return 'Your microphone is blocked. Click the lock icon in the address bar, allow the microphone, then try again.';
-      case 'could not agree on audio': return 'The call could not start: the phone system and this browser could not agree on audio. Tell ICT.';
+      case 'could not agree on audio': return 'The call could not start: the phone system and this browser could not agree on audio. Tell PMO ICT.';
       default: return 'The call ended: ' + c.reason + '.';
     }
   }
@@ -316,7 +316,7 @@
     catch (e) {
       showStatusPlain('No phone', 'bad');
       $('#who').innerHTML = '<span class="name">' + esc(S.me.display || S.me.name) + '</span><span class="sep">&middot;</span><a href="#" id="out">Sign out</a>';
-      $('#out').onclick = async ev => { ev.preventDefault(); try { await api('POST', '/api/logout'); } catch (x) { /* out */ } location.reload(); };
+      $('#out').onclick = async ev => { ev.preventDefault(); store.set(RECENT, '[]'); try { await api('POST', '/api/logout'); } catch (x) { /* out */ } location.reload(); };
       $('#main').innerHTML = '<div class="login"><div class="card"><h2>No phone yet</h2><p class="sub">' + esc(e.message) + '</p>' +
         (S.me.role !== 'phone' ? '<p class="why"><a href="/">Open the phone directory instead</a></p>' : '') + '</div></div>';
       return;

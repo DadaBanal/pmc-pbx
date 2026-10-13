@@ -8,10 +8,14 @@
  *   the engine -> INVITE 9197 -> 200 OK whose SDP carries a DTLS fingerprint and ICE -> BYE -> no channels left.
  *
  * Controls that must fail: the WebSocket without a session cookie; a REGISTER with the wrong password.
+ * And the gate cannot be walked round (review 14 Oct 2026): the browser phone's own password, sent straight to the
+ * engine's SIP-over-TLS port, is refused. Its control: a desk phone's password on the same port is accepted.
  * Run on the CI engine after the admin-screen step: node app/test/ws-call.js [https://127.0.0.1:8443]
  * Exits 0 only if every check holds.
  */
 const https = require('https');
+const tls = require('tls');
+const fs = require('fs');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const SIP = require('../public/sip');
@@ -45,6 +49,46 @@ const until = (fn, ms, what) => new Promise((resolve, reject) => {
   const t0 = Date.now();
   const iv = setInterval(() => { if (fn()) { clearInterval(iv); resolve(); } else if (Date.now() - t0 > ms) { clearInterval(iv); reject(new Error('timed out waiting for ' + what)); } }, 50);
 });
+
+// One REGISTER straight to the engine's TLS port, digest included; resolves to the final status code (or 'timeout').
+function tlsRegister(ext, password, domain) {
+  return new Promise(resolve => {
+    const callId = crypto.randomBytes(8).toString('hex'), tag = crypto.randomBytes(4).toString('hex');
+    let cseq = 0, buf = '', done = false;
+    const finish = v => { if (done) return; done = true; clearTimeout(timer); try { sock.end(); } catch (e) { /* closed */ } resolve(v); };
+    const timer = setTimeout(() => finish('timeout'), 10000);
+    const sock = tls.connect({ host: '127.0.0.1', port: 5061, rejectUnauthorized: false }, () => send(null));
+    sock.on('error', e => finish('error ' + e.message));
+    function send(auth) {
+      cseq++;
+      const port = sock.localPort;
+      const h = [['Via', 'SIP/2.0/TLS 127.0.0.1:' + port + ';branch=z9hG4bK' + crypto.randomBytes(6).toString('hex') + ';rport'], ['Max-Forwards', '70'],
+        ['From', '<sip:' + ext + '@' + domain + '>;tag=' + tag], ['To', '<sip:' + ext + '@' + domain + '>'], ['Call-ID', callId], ['CSeq', cseq + ' REGISTER'],
+        ['Contact', '<sip:' + ext + '@127.0.0.1:' + port + ';transport=tls>'], ['Expires', '60']];
+      if (auth) h.push(['Authorization', auth]);
+      sock.write(SIP.build('REGISTER sip:' + domain + ' SIP/2.0', h, ''));
+    }
+    sock.on('data', d => {
+      buf += d.toString('utf8');
+      for (;;) {
+        const end = buf.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        const head = buf.slice(0, end);
+        const len = Number((/content-length:\s*(\d+)/i.exec(head) || [0, 0])[1]);
+        if (buf.length < end + 4 + len) return;
+        const msg = SIP.parse(buf.slice(0, end + 4 + len));
+        buf = buf.slice(end + 4 + len);
+        if (!msg.status || msg.status < 200) continue;
+        if ((msg.status === 401 || msg.status === 407) && cseq === 1) {
+          const ch = SIP.parseChallenge((msg.headers['www-authenticate'] || msg.headers['proxy-authenticate'] || [''])[0]);
+          send(SIP.digestAuthorization(ch, { username: ext, password, method: 'REGISTER', uri: 'sip:' + domain, cnonce: crypto.randomBytes(8).toString('hex'), nc: 1 }).header);
+          continue;
+        }
+        return finish(msg.status);
+      }
+    });
+  });
+}
 
 // An SDP offer shaped like a browser's: DTLS-SRTP over ICE, rtcp-mux, the codecs the endpoint allows
 function webrtcOffer() {
@@ -131,6 +175,17 @@ const media = seen => ({ async create() { return {
   await bad.stop();
   ok('control: the wrong password was refused');
 
-  console.log('VERDICT: PASS - the browser phone registers and calls through the gate on the real engine; both controls failed as they must');
+  // ---------------------------------------------------------------- the gate cannot be walked round
+  const direct = await tlsRegister(creds.ext, creds.password, creds.domain);
+  if (direct === 200) fail('the browser phone\'s password REGISTERED straight on 5061 - the engine accepts it outside the gate');
+  ok('the browser phone\'s own password, sent straight to 5061, was refused (' + direct + ')');
+  const secrets = JSON.parse(fs.readFileSync(process.env.PMC_SECRETS || '/etc/pmc-pbx/secrets/secrets.json', 'utf8'));
+  const desk = Object.keys(secrets.sip).find(x => x !== creds.ext && /^1\d{3}$/.test(x));
+  if (!desk) fail('no desk-phone extension to use as the control');
+  const deskStatus = await tlsRegister(desk, secrets.sip[desk], creds.domain);
+  if (deskStatus !== 200) fail('CONTROL: desk phone ' + desk + ' could not register on 5061 (' + deskStatus + '), so the refusal above proves nothing');
+  ok('control: desk phone ' + desk + ' registered on 5061 with its own password (200)');
+
+  console.log('VERDICT: PASS - the browser phone registers and calls through the gate on the real engine, and only through the gate; every control behaved');
   process.exit(0);
 })().catch(e => fail(e.stack || e.message));

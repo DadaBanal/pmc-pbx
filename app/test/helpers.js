@@ -25,6 +25,8 @@ function makeEnv(overrides) {
     listen: { host: '127.0.0.1', port: 0 },
     admin: { host: '127.0.0.1', port: 0, sessionHours: 1 },
     asterisk: { command: [process.execPath, path.join(__dirname, 'fake-asterisk.js')], timeoutMs: 5000 },
+    // engine and browser are the same machine in tests, so loopback media is right here, and only here
+    webrtcMediaAddress: '127.0.0.1',
     certFile: path.join(secrets, 'cert.pem'),
     keyFile: path.join(secrets, 'key.pem'),
     outDir: out,

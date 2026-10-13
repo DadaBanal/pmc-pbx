@@ -7,6 +7,11 @@
   const $ = (s, c) => (c || d).querySelector(s);
   const $$ = (s, c) => Array.prototype.slice.call((c || d).querySelectorAll(s));
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // every time on these screens is Philippine time; the server stores UTC (review 14 Oct 2026: screens showed UTC unlabelled)
+  const PHT = { date: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }),
+    min: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }),
+    sec: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) };
+  const pht = (iso, how) => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? String(iso) : PHT[how || 'min'].format(d); };
   const icon = (n, cls) => '<svg class="ic' + (cls ? ' ' + cls : '') + '" aria-hidden="true"><use href="#i-' + n + '"></use></svg>';
   // The model catalogue comes from the server, so a new vendor driver appears here with no change to this file.
   let MODELSPEC = {};
@@ -110,7 +115,7 @@
       (st.engine.state === 'ok' ? '<span class="chip ok"><i class="dot"></i>Engine running</span>' : '<span class="chip bad"><i class="dot"></i>Engine unreachable</span>') +
       (st.pending ? '<span class="chip warn"><i class="dot"></i>Changes not yet applied</span>' : '<span class="chip ok"><i class="dot"></i>All changes applied</span>') +
       '<span class="chip">' + st.registered + ' phone' + (st.registered === 1 ? '' : 's') + ' online</span>' +
-      (st.certDaysLeft < 30 ? '<span class="chip warn">' + icon('shield') + 'Certificate: ' + st.certDaysLeft + ' days left</span>' : '') + '</div>';
+      (st.certDaysLeft < 30 ? '<span class="chip warn">' + icon('shield') + 'Certificate: ' + st.certDaysLeft + (st.certDaysLeft === 1 ? ' day' : ' days') + ' left</span>' : '') + '</div>';
   };
 
   // ---------------------------------------------------------------- router
@@ -133,10 +138,10 @@
   function renderLogin() {
     $('#nav').innerHTML = ''; $('#who').innerHTML = '';
     $('#main').innerHTML = '<div class="login"><div class="card"><h2>Sign in</h2><p class="sub">PMC Phones, the hospital telephone directory and phone setup.</p>' +
-      '<form id="login"><div><label>Name</label><input name="name" autocomplete="username" required autofocus></div>' +
-      '<div><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>' +
+      '<form id="login"><div><label for="login-name">Name</label><input id="login-name" name="name" autocomplete="username" required autofocus></div>' +
+      '<div><label for="login-password">Password</label><input id="login-password" name="password" type="password" autocomplete="current-password" required></div>' +
       '<button class="primary" type="submit">Sign in</button></form></div>' +
-      '<p class="why" style="text-align:center">Accounts are given by ICT. Viewers see, editors change phones, administrators run the system. Staff with a browser phone go straight to it.</p></div>';
+      '<p class="why" style="text-align:center">Accounts are given by PMO ICT. Viewers see, editors change phones, administrators run the system. Staff with a browser phone go straight to it.</p></div>';
     $('#login').onsubmit = async ev => {
       ev.preventDefault(); const f = ev.target; busy($('button', f), true);
       try { S.me = await api('POST', '/api/login', { name: f.name.value, password: f.password.value }); if (S.me.role === 'phone') { location.replace('/phone'); return; } await loadAll(); renderShell(); if (!location.hash) location.hash = '#/overview'; else route(); }
@@ -164,15 +169,15 @@
       '<dt>Version</dt><dd>' + esc(st && st.engine.version ? st.engine.version.replace(/ built by.*$/, '') : '') + '</dd>' +
       '<dt>Active calls</dt><dd>' + (st && st.engine.activeCalls != null ? st.engine.activeCalls : '') + '</dd>' +
       '<dt>Applied version</dt><dd>' + (st ? esc(st.appliedVersion == null ? 'never' : st.appliedVersion) + (st.pending ? ' <span class="pill warn">directory is at ' + st.directoryVersion + '</span>' : '') : '') + '</dd>' +
-      '<dt>Applied at</dt><dd>' + esc(st && st.appliedAt ? st.appliedAt.replace('T', ' ').slice(0, 16) + ' UTC' : '') + '</dd>' +
-      '<dt>Last change</dt><dd>' + esc(dir.updatedAt ? dir.updatedAt.replace('T', ' ').slice(0, 16) + ' UTC by ' + dir.updatedBy : 'none yet') + '</dd></dl>' +
+      '<dt>Applied at</dt><dd>' + esc(st && st.appliedAt ? pht(st.appliedAt) : '') + '</dd>' +
+      '<dt>Last change</dt><dd>' + esc(dir.updatedAt ? pht(dir.updatedAt) + ' by ' + dir.updatedBy : 'none yet') + '</dd></dl>' +
       (can('editor') && st && st.pending ? '<div class="actions"><button class="primary" id="apply">' + icon('check') + 'Apply changes now</button></div>' : '') + '</div>' +
       '<div class="card"><h3>' + icon('building') + 'Numbers by department</h3>' + (byDept ? '<table class="grid"><thead><tr><th>Department</th><th>Block</th><th class="right">In use</th><th class="right">Free</th></tr></thead><tbody>' + byDept + '</tbody></table>' : '<div class="empty">No departments yet.</div>') + '</div></div>' +
       (can('admin') ? '<div class="card" id="recent"><h3>' + icon('note') + 'Latest changes</h3><div class="empty">Loading...</div></div>' : '');
     if ($('#apply')) $('#apply').onclick = () => applyChanges($('#apply'));
     if (can('admin')) api('GET', '/api/audit?limit=8').then(rows => {
       const box = $('#recent'); if (!box) return;
-      box.innerHTML = '<h3>' + icon('note') + 'Latest changes</h3>' + (rows.length ? '<ul class="timeline">' + rows.map(r => '<li><span class="when">' + esc((r.at || '').replace('T', ' ').slice(0, 16)) + '</span> &middot; <b>' + esc(r.who) + '</b> ' + esc(r.action) + (r.detail ? ' <span class="muted">' + esc(r.detail) + '</span>' : '') + '</li>').join('') + '</ul><a href="#/history">All history &rarr;</a>' : '<div class="empty">Nothing yet.</div>');
+      box.innerHTML = '<h3>' + icon('note') + 'Latest changes</h3>' + (rows.length ? '<ul class="timeline">' + rows.map(r => '<li><span class="when">' + esc(pht(r.at)) + '</span> &middot; <b>' + esc(r.who) + '</b> ' + esc(r.action) + (r.detail ? ' <span class="muted">' + esc(r.detail) + '</span>' : '') + '</li>').join('') + '</ul><a href="#/history">All history &rarr;</a>' : '<div class="empty">Nothing yet.</div>');
     }).catch(() => {});
   }
 
@@ -258,7 +263,7 @@
       })() + '</select></div>' +
       '<div class="field"><label>Desk phone MAC (the sticker under the phone)</label><input name="mac" class="mono" value="' + esc(e.mac) + '" placeholder="00:15:65:xx:xx:xx" autocomplete="off"></div>' +
       '<div class="field check"><input type="checkbox" name="voicemail" id="vm"' + (e.voicemail ? ' checked' : '') + '><label for="vm">Voicemail on this number</label></div>' +
-      '<div class="field"><label>Notes (for ICT)</label><input name="notes" value="' + esc(e.notes) + '" maxlength="200"></div></div></div>' +
+      '<div class="field"><label>Notes (for PMO ICT)</label><input name="notes" value="' + esc(e.notes) + '" maxlength="200"></div></div></div>' +
       '<div class="card" id="keycard"><h3>' + icon('sparkle') + 'Buttons on the phone</h3><p class="why" id="keywhy" style="margin:0 0 10px">Watch a colleague\'s light and dial them with one press, or dial only.</p><div class="keys" id="keys-list">' + e.keys.map(keyRow).join('') + '</div><div class="actions" style="justify-content:flex-start"><button class="ghost small" type="button" id="addkey">' + icon('plus') + 'Add a button</button></div></div>' +
       '<div class="actions"><span class="spacer"></span>' + (!isNew ? '<button class="danger" type="button" id="remove">' + icon('trash') + 'Remove this number</button>' : '') + (!isNew && can('admin') ? '<button class="ghost" type="button" id="secrets">' + icon('lock') + 'First-time setup details</button>' : '') + '<a class="btn ghost" href="#/phones">Cancel</a><button class="primary" type="submit" id="save">' + icon('check') + (isNew ? 'Add the phone' : 'Save') + '</button></div>' +
       '<div id="secretbox"></div></form>';
@@ -352,9 +357,9 @@
     try { users = await api('GET', '/api/users'); } catch (e) { toast(e.message, 'bad'); }
     const ROLE_NAMES = ['phone', 'viewer', 'editor', 'admin'];
     $('#main').innerHTML = '<h1>Users</h1><p class="sub">Phone uses only their own browser phone. Viewer sees the directory. Editor adds and changes phones and presses Apply. Admin also manages departments, users and first-time setup details. Anyone with a linked extension can use the browser phone at /phone; that extension must be a "PMC browser phone".</p>' +
-      '<div class="grid2"><div class="card"><h3>' + icon('users') + 'Who can sign in</h3><table class="grid"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Created</th><th></th></tr></thead><tbody>' +
+      '<div class="grid2"><div class="card"><h3>' + icon('users') + 'Admin screen accounts</h3><table class="grid"><thead><tr><th>Name</th><th>Role</th><th>Phone</th><th>Created</th><th></th></tr></thead><tbody>' +
       users.map(u => '<tr' + (u.disabled ? ' style="opacity:.6"' : '') + '><td>' + esc(u.name) + (u.disabled ? ' <span class="pill">disabled</span>' : '') + (u.name === S.me.name ? ' <span class="pill live">you</span>' : '') + '</td><td><select data-role="' + esc(u.name) + '"' + (u.name === S.me.name ? ' disabled' : '') + ' style="width:auto">' + ROLE_NAMES.map(r => '<option' + (r === u.role ? ' selected' : '') + '>' + r + '</option>').join('') + '</select></td>' +
-        '<td><input data-ext="' + esc(u.name) + '" value="' + esc(u.ext || '') + '" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="none" aria-label="Linked extension for ' + esc(u.name) + '" style="width:6.5em"></td><td class="muted">' + esc((u.createdAt || '').slice(0, 10)) + '</td>' +
+        '<td><input data-ext="' + esc(u.name) + '" value="' + esc(u.ext || '') + '" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="none" aria-label="Linked extension for ' + esc(u.name) + '" style="width:6.5em"></td><td class="muted">' + esc(pht(u.createdAt, 'date')) + '</td>' +
         '<td class="right"><button class="ghost small" data-reset="' + esc(u.name) + '">' + icon('lock') + 'Reset password</button> ' + (u.name === S.me.name ? '' : '<button class="ghost small" data-toggle="' + esc(u.name) + '" data-dis="' + (u.disabled ? '0' : '1') + '">' + (u.disabled ? 'Enable' : 'Disable') + '</button>') + '</td></tr>').join('') + '</tbody></table></div>' +
       '<div class="card"><h3>' + icon('plus') + 'Add a user</h3><form id="uf"><div class="fields"><div class="field"><label>Name (lower case)</label><input name="name" required pattern="[a-z][a-z0-9._-]{1,31}" placeholder="maria.santos"></div><div class="field"><label>Role</label><select name="role"><option>phone</option><option selected>viewer</option><option>editor</option><option>admin</option></select></div>' +
       '<div class="field"><label>Linked extension (browser phone, optional)</label><input name="ext" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="e.g. 1201"></div>' +
@@ -375,11 +380,16 @@
       ? 'Anyone in ' + esc(pu.ad.groups.join(' or ')) + ' signs in to the phone with their Windows name and password, and gets a browser phone in ' + esc(pu.ad.dept) + ' the first time. Membership is checked at every sign-in. Switch someone off here to stop them while they stay in the group.'
       : 'Windows sign-in is not set up on this server.') + '</p>' +
       (pu.users.length ? '<table class="grid"><thead><tr><th>Windows name</th><th>Name</th><th>Phone</th><th>Added</th><th>Last sign-in</th><th></th></tr></thead><tbody>' +
-        pu.users.map(u => '<tr' + (u.disabled ? ' style="opacity:.6"' : '') + '><td class="mono">' + esc(u.sam) + (u.disabled ? ' <span class="pill">off</span>' : '') + '</td><td>' + esc(u.name) + '</td><td class="mono">' + esc(u.ext) + '</td><td class="muted">' + esc((u.addedAt || '').slice(0, 10)) + '</td><td class="muted">' + esc(u.lastSignIn ? u.lastSignIn.replace('T', ' ').slice(0, 16) : 'never') + '</td>' +
-          '<td class="right"><button class="ghost small" data-pu="' + esc(u.sam) + '" data-dis="' + (u.disabled ? '0' : '1') + '">' + (u.disabled ? 'Switch on' : 'Switch off') + '</button></td></tr>').join('') + '</tbody></table>'
+        pu.users.map(u => '<tr' + (u.disabled ? ' style="opacity:.6"' : '') + '><td class="mono">' + esc(u.sam) + (u.disabled ? ' <span class="pill">off</span>' : '') + '</td><td>' + esc(u.name) + '</td><td class="mono">' + esc(u.ext) + '</td><td class="muted">' + esc(pht(u.addedAt, 'date')) + '</td><td class="muted">' + esc(u.lastSignIn ? pht(u.lastSignIn) : 'never') + '</td>' +
+          '<td class="right"><button class="ghost small" data-pu="' + esc(u.sam) + '" data-dis="' + (u.disabled ? '0' : '1') + '">' + (u.disabled ? 'Switch on' : 'Switch off') + '</button> ' +
+          '<button class="ghost small" data-pu-rm="' + esc(u.sam) + '" data-ext="' + esc(u.ext) + '" aria-label="Remove ' + esc(u.sam) + ' and phone ' + esc(u.ext) + '">Remove</button></td></tr>').join('') + '</tbody></table>'
         : '<div class="empty">Nobody yet. People appear here the first time they sign in.</div>');
     $('#main').appendChild(card);
     $$('[data-pu]').forEach(b => b.onclick = async () => { try { await api('PUT', '/api/phone-users/' + b.dataset.pu, { disabled: b.dataset.dis === '1' }); toast(b.dataset.dis === '1' ? 'Switched off' : 'Switched on', 'ok'); renderUsers(); } catch (e) { toast(e.message, 'bad'); } });
+    $$('[data-pu-rm]').forEach(b => b.onclick = async () => {
+      if (!confirm('Remove ' + b.dataset.puRm + ' and their browser phone ' + b.dataset.ext + '? If they are still in the group, signing in again gives them a new number. Press Apply changes afterwards.')) return;
+      try { await api('DELETE', '/api/phone-users/' + b.dataset.puRm); toast('Removed. Apply changes to take phone ' + b.dataset.ext + ' off the engine.', 'ok'); renderUsers(); } catch (e) { toast(e.message, 'bad'); }
+    });
   }
 
   function renderPassword() {
@@ -396,7 +406,7 @@
     const draw = (filter) => {
       const list = rows.filter(r => !filter || r.action === filter);
       $('#hist').innerHTML = list.length ? '<table class="grid"><thead><tr><th>When</th><th>Who</th><th>What</th><th>Detail</th><th class="right">Version</th></tr></thead><tbody>' +
-        list.map(r => '<tr><td class="mono muted">' + esc((r.at || '').replace('T', ' ').slice(0, 19)) + '</td><td>' + esc(r.who) + '</td><td>' + esc(r.action) + '</td><td class="wrap">' + esc(r.detail) + '</td><td class="right">' + esc(r.version == null ? '' : r.version) + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">Nothing yet.</div>';
+        list.map(r => '<tr><td class="mono muted">' + esc(pht(r.at, 'sec')) + '</td><td>' + esc(r.who) + '</td><td>' + esc(r.action) + '</td><td class="wrap">' + esc(r.detail) + '</td><td class="right">' + esc(r.version == null ? '' : r.version) + '</td></tr>').join('') + '</tbody></table>' : '<div class="empty">Nothing yet.</div>';
     };
     $('#main').innerHTML = '<h1>History</h1><p class="sub">Every change, who made it and when. Newest first.</p><div class="card"><form class="toolbar" onsubmit="return false"><div><label>Show</label><select id="hf"><option value="">Everything</option>' + actions.map(a => '<option>' + esc(a) + '</option>').join('') + '</select></div><div class="wide"></div><div><span class="muted">' + rows.length + ' entries</span></div></form></div><div class="card" id="hist"></div>';
     $('#hf').onchange = () => draw($('#hf').value); draw('');

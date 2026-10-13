@@ -56,7 +56,10 @@ function serveStatic(res, rootDir, urlPath) {
   const file = path.join(rootDir, clean);
   if (!file.startsWith(rootDir) || !fs.existsSync(file) || !fs.statSync(file).isFile()) return sendText(res, 404, 'text/plain', 'not found');
   const type = TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
-  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
+  const headers = { 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' };
+  // pages: scripts only from this site, no framing; inline style attributes are used by the screens' own markup
+  if (/^text\/html/.test(type)) headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  res.writeHead(200, headers);
   fs.createReadStream(file).pipe(res);
 }
 

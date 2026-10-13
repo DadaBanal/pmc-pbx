@@ -27,7 +27,7 @@ function readTlv(buf, i) {
   let len = buf[i + 1], p = i + 2;
   if (len & 0x80) {
     const n = len & 0x7f;
-    if (n < 1 || n > 4) throw new Error('BER length of ' + n + ' bytes');
+    if (n < 1 || n > 3) throw new Error('BER length of ' + n + ' bytes'); // nothing AD sends us needs more than 16 MB
     if (p + n > buf.length) return null;
     len = 0;
     for (let k = 0; k < n; k++) len = len * 256 + buf[p + k];
@@ -106,10 +106,13 @@ function connect(opts) {
         const e = new Error('directory certificate ' + (fp || 'none') + ' does not match the pinned one');
         fail(e); return reject(e);
       }
+      // every request has its own deadline: a controller that accepts TLS and then stops answering must not hang a
+      // sign-in forever (review 14 Oct 2026; the only timer used to be the handshake's)
       const call = (msg, collect) => new Promise((res, rej) => {
         if (closed) return rej(closed);
         const id = nextId++;
-        waiting.set(id, { reject: rej, onMsg: (b, op) => { const r = collect(b, op); if (r !== undefined) { waiting.delete(id); res(r); } } });
+        const timer = setTimeout(() => { fail(new Error('directory stopped answering after ' + timeoutMs + ' ms')); }, timeoutMs);
+        waiting.set(id, { reject: e => { clearTimeout(timer); rej(e); }, onMsg: (b, op) => { const r = collect(b, op); if (r !== undefined) { clearTimeout(timer); waiting.delete(id); res(r); } } });
         sock.write(msg(id));
       });
       const resultOf = (b, op) => { const c = children(b, op); const code = num(b, c[0]); const diag = c[2] ? text(b, c[2]) : ''; return { code, diag }; };
