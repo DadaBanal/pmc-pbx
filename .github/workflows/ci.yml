@@ -80,8 +80,27 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: stand in for systemd, so the unit-install branch runs here as it does on the VM
+        run: |
+          # The container has no systemd, so build-asterisk.sh used to skip its unit install entirely, and a
+          # path bug in that branch reached the first real VM build on 13 Oct 2026. A logging stub stands in.
+          mkdir -p /run/systemd/system
+          cat > /usr/local/bin/systemctl <<'STUB'
+          #!/bin/sh
+          echo "$*" >> /tmp/systemctl-calls.txt
+          exit 0
+          STUB
+          chmod +x /usr/local/bin/systemctl
+
       - name: build and install Asterisk (signature check skipped in CI; the VM build verifies it)
         run: SKIP_SIG=1 bash asterisk/build-asterisk.sh 22.11.0
+
+      - name: unit file installed and enabled by the build
+        run: |
+          cmp asterisk/asterisk.service /etc/systemd/system/asterisk.service
+          grep -qx 'daemon-reload' /tmp/systemctl-calls.txt
+          grep -qx 'enable asterisk' /tmp/systemctl-calls.txt
+          echo "unit installed; systemctl calls:"; cat /tmp/systemctl-calls.txt
 
       - name: version gate
         run: |

@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
+# Where this script lives, resolved BEFORE anything changes directory. Computing it later from a relative $0
+# broke the unit install on the first real VM build (13 Oct 2026): the script had already cd'd into the source
+# tree, readlink -f found nothing, and install looked for ./asterisk.service. CI never reached that line because
+# its container has no systemd; CI now stands in for systemd so the branch runs there too.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 VERSION="${1:-22.11.0}"
 BASE_URL="https://downloads.asterisk.org/pub/telephony/asterisk"
 TARBALL="asterisk-${VERSION}.tar.gz"
@@ -100,7 +106,7 @@ id asterisk >/dev/null 2>&1 || useradd --system --home-dir /var/lib/asterisk --s
 mkdir -p /var/run/asterisk
 chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /var/run/asterisk 2>/dev/null || true
 
-UNIT_SRC="$(dirname "$(readlink -f "$0")")/asterisk.service"
+UNIT_SRC="${SCRIPT_DIR}/asterisk.service"
 if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
     install -m 0644 "$UNIT_SRC" /etc/systemd/system/asterisk.service
     systemctl daemon-reload
