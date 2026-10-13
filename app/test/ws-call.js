@@ -16,6 +16,7 @@
 const https = require('https');
 const tls = require('tls');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const SIP = require('../public/sip');
@@ -50,21 +51,29 @@ const until = (fn, ms, what) => new Promise((resolve, reject) => {
   const iv = setInterval(() => { if (fn()) { clearInterval(iv); resolve(); } else if (Date.now() - t0 > ms) { clearInterval(iv); reject(new Error('timed out waiting for ' + what)); } }, 50);
 });
 
-// One REGISTER straight to the engine's TLS port, digest included; resolves to the final status code (or 'timeout').
-function tlsRegister(ext, password, domain) {
+// This machine's own non-loopback address. The direct-to-5061 checks must come from here: the webphone ACL PERMITS
+// 127.0.0.1, because that is where the app's /ws gate reaches the engine from, so a check from loopback proves
+// nothing (CI run 38478413957, 14 Oct 2026, registered from 127.0.0.1 and failed this run for exactly that reason).
+function ownAddress() {
+  for (const list of Object.values(os.networkInterfaces())) for (const a of list || []) if (a.family === 'IPv4' && !a.internal) return a.address;
+  return null;
+}
+
+// One REGISTER straight to the engine's TLS port, from addr, digest included; resolves to the final status (or 'timeout').
+function tlsRegister(ext, password, domain, addr) {
   return new Promise(resolve => {
     const callId = crypto.randomBytes(8).toString('hex'), tag = crypto.randomBytes(4).toString('hex');
     let cseq = 0, buf = '', done = false;
     const finish = v => { if (done) return; done = true; clearTimeout(timer); try { sock.end(); } catch (e) { /* closed */ } resolve(v); };
     const timer = setTimeout(() => finish('timeout'), 10000);
-    const sock = tls.connect({ host: '127.0.0.1', port: 5061, rejectUnauthorized: false }, () => send(null));
+    const sock = tls.connect({ host: addr, port: 5061, localAddress: addr, rejectUnauthorized: false }, () => send(null));
     sock.on('error', e => finish('error ' + e.message));
     function send(auth) {
       cseq++;
       const port = sock.localPort;
-      const h = [['Via', 'SIP/2.0/TLS 127.0.0.1:' + port + ';branch=z9hG4bK' + crypto.randomBytes(6).toString('hex') + ';rport'], ['Max-Forwards', '70'],
+      const h = [['Via', 'SIP/2.0/TLS ' + addr + ':' + port + ';branch=z9hG4bK' + crypto.randomBytes(6).toString('hex') + ';rport'], ['Max-Forwards', '70'],
         ['From', '<sip:' + ext + '@' + domain + '>;tag=' + tag], ['To', '<sip:' + ext + '@' + domain + '>'], ['Call-ID', callId], ['CSeq', cseq + ' REGISTER'],
-        ['Contact', '<sip:' + ext + '@127.0.0.1:' + port + ';transport=tls>'], ['Expires', '60']];
+        ['Contact', '<sip:' + ext + '@' + addr + ':' + port + ';transport=tls>'], ['Expires', '60']];
       if (auth) h.push(['Authorization', auth]);
       sock.write(SIP.build('REGISTER sip:' + domain + ' SIP/2.0', h, ''));
     }
@@ -176,13 +185,16 @@ const media = seen => ({ async create() { return {
   ok('control: the wrong password was refused');
 
   // ---------------------------------------------------------------- the gate cannot be walked round
-  const direct = await tlsRegister(creds.ext, creds.password, creds.domain);
+  const own = ownAddress();
+  if (!own) fail('no non-loopback address on this machine to test 5061 from');
+  ok('direct 5061 checks come from ' + own + ', not loopback');
+  const direct = await tlsRegister(creds.ext, creds.password, creds.domain, own);
   if (direct === 200) fail('the browser phone\'s password REGISTERED straight on 5061 - the engine accepts it outside the gate');
   ok('the browser phone\'s own password, sent straight to 5061, was refused (' + direct + ')');
   const secrets = JSON.parse(fs.readFileSync(process.env.PMC_SECRETS || '/etc/pmc-pbx/secrets/secrets.json', 'utf8'));
   const desk = Object.keys(secrets.sip).find(x => x !== creds.ext && /^1\d{3}$/.test(x));
   if (!desk) fail('no desk-phone extension to use as the control');
-  const deskStatus = await tlsRegister(desk, secrets.sip[desk], creds.domain);
+  const deskStatus = await tlsRegister(desk, secrets.sip[desk], creds.domain, own);
   if (deskStatus !== 200) fail('CONTROL: desk phone ' + desk + ' could not register on 5061 (' + deskStatus + '), so the refusal above proves nothing');
   ok('control: desk phone ' + desk + ' registered on 5061 with its own password (200)');
 
