@@ -47,7 +47,7 @@ try {
 $json = ConvertTo-Json -Compress -InputObject @($members.Values)
 if ($members.Count -eq 0) { $json = '[]' }
 # PowerShell 5.1 pipes to native programs as ASCII unless told otherwise: names with n-tilde would arrive mangled
-$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)   # no byte-order mark: 5.1 sent ef bb bf first (14 Oct 2026)
 $mode = if ($Apply) { 'sync' } else { 'preview' }
 $ssh = Join-Path $env:WINDIR 'System32\OpenSSH\ssh.exe'
 # 5.1 turns a native program's stderr into a terminating error under 'Stop': every run must reach the log line

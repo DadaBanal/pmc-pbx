@@ -379,6 +379,10 @@ test('the sync command the scheduled task runs: strict input, adds and applies, 
     const dry = spawnSync(process.execPath, [path.join(__dirname, '..', 'admin.js'), 'sync-members', '--dry-run'], { input: '[]', encoding: 'utf8',
       env: Object.assign({}, process.env, { PMC_PBX_CONF: env.conf }) });
     assert.equal(dry.status, 0); assert.match(dry.stdout, /would switch off: NOBODY/);
+    // a byte-order mark in front of the list, as Windows PowerShell 5.1 sent it on 14 Oct 2026, is accepted
+    const bom = spawnSync(process.execPath, [path.join(__dirname, '..', 'admin.js'), 'sync-members', '--dry-run'], { input: '\uFEFF[{"sam":"zed.bom","name":"Z","group":"PMO Team"}]\r\n', encoding: 'utf8',
+      env: Object.assign({}, process.env, { PMC_PBX_CONF: env.conf }) });
+    assert.equal(bom.status, 0, bom.stderr); assert.match(bom.stdout, /would add: zed\.bom/);
     void execFileSync;
   } finally { env.cleanup(); delete process.env.FAKE_PJSIP_FILE; }
 });
