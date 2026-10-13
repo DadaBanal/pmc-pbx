@@ -102,10 +102,11 @@ async function password(prompt) {
         console.error('stdin must be a list of { sam, name, group }'); process.exit(2);
       }
       if (dry) {
-        const have = new Set(PU.load(cfg).users.map(u => u.sam));
-        const inAd = new Set(members.map(m => String(m.sam).toLowerCase()));
-        console.log('would add: ' + (members.filter(m => !have.has(String(m.sam).toLowerCase())).map(m => m.sam).join(', ') || 'none'));
-        console.log('would switch off: ' + (PU.load(cfg).users.filter(u => !u.disabled && !inAd.has(u.sam)).map(u => u.sam).join(', ') || 'none'));
+        // the same rules as the real run (review 14 Oct 2026: the first preview skipped the safety guard and said it
+        // "would switch off" everyone for an empty list, which the real sync refuses)
+        const p = PU.plan(cfg, members);
+        console.log('would add: ' + (p.add.join(', ') || 'none') + ' | would switch back on: ' + (p.reEnable.join(', ') || 'none'));
+        console.log(p.refused ? 'would switch off: NOBODY - ' + p.refused : 'would switch off: ' + (p.leave.join(', ') || 'none'));
         break;
       }
       const m0 = store.loadManifest(), d0 = V.normalizeDirectory(store.loadDirectory());

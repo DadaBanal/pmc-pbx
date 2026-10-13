@@ -73,14 +73,33 @@ function remove(cfg, store, sam, who) {
 // switches off anyone no longer in any group (marked disabledBy 'sync'), and back on if they return; never touches
 // someone PMO ICT switched off by hand (disabledBy 'admin'). Refuses to switch anyone off when the member list is
 // empty or would take more than half the list: a failed or partial AD read must never cut everyone off.
-function reconcile(cfg, store, members, who) {
-  const out = { added: [], reEnabled: [], disabled: [], refused: null, skipped: [] };
-  const want = new Map();
+// What a sync WOULD do, with the same rules, and no writes. The preview prints this; reconcile() acts on it.
+function plan(cfg, members) {
+  const out = { want: new Map(), add: [], reEnable: [], leave: [], refused: null, skipped: [] };
   for (const m of Array.isArray(members) ? members : []) {
     const sam = String((m && m.sam) || '').toLowerCase();
     if (!SAM_RE.test(sam)) { out.skipped.push(String((m && m.sam) || '?')); continue; }
-    if (!want.has(sam)) want.set(sam, { sam, name: String(m.name || sam), group: String(m.group || '') });
+    if (!out.want.has(sam)) out.want.set(sam, { sam, name: String(m.name || sam), group: String(m.group || '') });
   }
+  const data = load(cfg);
+  for (const m of out.want.values()) {
+    const have = find(data, m.sam);
+    if (!have) out.add.push(m.sam);
+    else if (have.disabled && have.disabledBy === 'sync') out.reEnable.push(m.sam);
+  }
+  out.leave = data.users.filter(u => !u.disabled && !out.want.has(u.sam)).map(u => u.sam);
+  const active = data.users.filter(u => !u.disabled).length;
+  if (out.leave.length && (out.want.size === 0 || out.leave.length > Math.max(1, Math.floor(active / 2)))) {
+    out.refused = 'would switch off ' + out.leave.length + ' of ' + active + ' active phone users (AD returned ' + out.want.size + ' members): refused, nobody switched off';
+  }
+  return out;
+}
+
+function reconcile(cfg, store, members, who) {
+  const out = { added: [], reEnabled: [], disabled: [], refused: null, skipped: [] };
+  const p = plan(cfg, members);
+  const want = p.want;
+  out.skipped = p.skipped.slice();
   for (const m of want.values()) {
     const have = find(load(cfg), m.sam);
     if (!have) {
@@ -108,4 +127,4 @@ function reconcile(cfg, store, members, who) {
   return out;
 }
 
-module.exports = { load, save, find, add, update, remove, reconcile, SAM_RE };
+module.exports = { load, save, find, add, update, remove, plan, reconcile, SAM_RE };

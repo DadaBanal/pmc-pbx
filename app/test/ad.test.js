@@ -375,6 +375,10 @@ test('the sync command the scheduled task runs: strict input, adds and applies, 
       assert.equal(r.status, 2, 'refused: ' + bad);
     }
     assert.equal(PU.load(env.cfg).users.length, 1);
+    // the preview follows the same safety rules as the real run: an empty AD answer switches NOBODY off
+    const dry = spawnSync(process.execPath, [path.join(__dirname, '..', 'admin.js'), 'sync-members', '--dry-run'], { input: '[]', encoding: 'utf8',
+      env: Object.assign({}, process.env, { PMC_PBX_CONF: env.conf }) });
+    assert.equal(dry.status, 0); assert.match(dry.stdout, /would switch off: NOBODY/);
     void execFileSync;
   } finally { env.cleanup(); delete process.env.FAKE_PJSIP_FILE; }
 });
