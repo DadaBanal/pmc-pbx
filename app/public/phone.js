@@ -339,5 +339,7 @@
       d.addEventListener('click', () => { try { Notification.requestPermission(); } catch (e) { /* not offered */ } }, { once: true });
     }
   }
+  // installed-app support: the worker caches nothing, it only shows a plain message when the server cannot be reached
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js', { scope: '/phone' }).catch(() => {});
   boot();
 })();

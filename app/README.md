@@ -34,7 +34,7 @@ reachable and whether there are changes not yet applied.
 |---|---|
 | `server.js` | both listeners, the API, `applyChanges()` |
 | `gen.js` | command-line generator (same code as Apply, without the reload) |
-| `admin.js` | command line: `adduser`, `passwd`, `users`, `check`, `apply` |
+| `admin.js` | command line: `adduser`, `passwd`, `users`, `check`, `apply`, `addext`, `link` |
 | `lib/validate.js` | the directory rules and the next-free-number logic |
 | `lib/generate.js` | Asterisk, Yealink and phonebook rendering |
 | `lib/store.js` | directory.json with version, history copies (last 50) and the audit trail; secrets.json 0600 |
@@ -118,6 +118,32 @@ Proven: `test/sip.test.js` (MD5 against RFC 1321, digest against RFC 2617's work
 `test/softphone.test.js` (the role, the routes, and the gate refusing no session, a foreign Origin, an unlinked user
 and the public listener), and in CI `test/ws-call.js` registers and calls 9197 through the gate on the real engine.
 **Not provable without a person:** audio both ways in a real browser. 9196 is an echo test for exactly that.
+
+### As an installed app
+
+Dada, 13 Oct 2026: *"well we need a phone app for this"*. The same page installs as an app, with its own window,
+Start menu entry, taskbar icon and the PMC Phone icon, and nothing downloaded from outside. It is not a RemoteApp:
+on on-premises RDS, Microsoft documents calling audio as server-side rendered and degraded, and its offload exists
+only in Azure Virtual Desktop, Windows 365 and Dev Box.
+
+| Piece | What it does |
+|---|---|
+| `public/manifest.webmanifest` | name, `/phone` as start and scope, standalone window, three icons (192, 512, 512 maskable) |
+| `public/sw.js` | caches nothing (a phone running yesterday's `sip.js` is worse than one that says it is offline); turns a failed page load into a plain "cannot reach the phone system" page |
+| `public/icons/` | rendered from an SVG with headless Edge; white handset on the accent gradient |
+| `test/pwa.test.js` | the files are well formed and the right sizes, the page links them, the worker scope matches, the server gives them out **before sign-in** (Edge's force-install fetches them signed out), and the worker passes a live page through untouched |
+
+**Every PC, pushed by Group Policy** (Microsoft Edge ADMX, Computer or User Configuration > Administrative
+Templates > Microsoft Edge). Both policies are Windows-only; neither works on Android or iOS.
+
+| Policy | Value |
+|---|---|
+| Configure list of force-installed Web Apps (`WebAppInstallForceList`) | `[{"url":"https://pbx.pmcne.ph:8443/phone","default_launch_container":"window","create_desktop_shortcut":true}]` |
+| Web App management settings (`WebAppSettings`, Edge 120+) | `[{"manifest_id":"https://pbx.pmcne.ph:8443/phone","run_on_os_login":"run_windowed"}]`: opens at Windows sign-in, so it is there to ring |
+
+**Phones:** open `https://pbx.pmcne.ph:8443/phone` on the hospital Wi-Fi, then *Install app* (Android Chrome or
+Edge) or *Share > Add to Home Screen* (iPhone Safari). A web app rings only while it is open: there is no SIP push to
+wake it, so a closed app on a phone misses the call. Sign-in lasts `admin.sessionHours` (12), one sign-in per shift.
 
 ## Not built yet
 
