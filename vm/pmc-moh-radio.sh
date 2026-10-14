@@ -9,7 +9,8 @@
 # its stdout. It never exits on its own: it plays the first station that answers, falls back to the next if one fails,
 # and after a station has played for a minute it goes back to the first one, so the main station is preferred.
 # If every station fails it waits 20 s and tries again; callers on hold hear silence meanwhile.
-# Asterisk reads only while someone is on hold (res_musiconhold.c, no directory set), so between holds the pipe fills,
+# Asterisk reads only while someone is on hold (res_musiconhold.c, with musiconhold.conf naming an EMPTY directory;
+# with none it reads all the time - MEASURED 14 Oct 2026, 462 kbit/s idle), so between holds the pipe fills,
 # the download stalls and almost no internet is used. curl gives up on a stalled stream after 20 s; the next hold starts
 # with a few seconds of buffered audio, then a fresh connection.
 #
