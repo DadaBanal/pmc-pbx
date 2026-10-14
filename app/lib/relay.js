@@ -26,8 +26,9 @@ function iceServers(cfg, secret, ext, nowMs) {
   const expiry = Math.floor((nowMs === undefined ? Date.now() : nowMs) / 1000) + cfg.relay.ttlSeconds;
   const username = expiry + ':' + String(ext).replace(/[^0-9A-Za-z._-]/g, '');
   const h = cfg.relay.host;
-  return [{ urls: ['turn:' + h + ':3478?transport=udp', 'turn:' + h + ':3478?transport=tcp', 'turns:' + h + ':443?transport=tcp'],
-    username, credential: credential(secret, username) }];
+  // only the routes the gateway forwards: a route that never answers holds up every call while the browser waits on it
+  const ROUTE = { udp: 'turn:' + h + ':3478?transport=udp', tcp: 'turn:' + h + ':3478?transport=tcp', tls: 'turns:' + h + ':443?transport=tcp' };
+  return [{ urls: (cfg.relay.transports || ['udp', 'tcp', 'tls']).map(t => ROUTE[t]), username, credential: credential(secret, username) }];
 }
 
 module.exports = { ensureSecret, iceServers, credential };

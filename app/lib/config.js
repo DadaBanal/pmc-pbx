@@ -64,7 +64,9 @@ function loadConfig(confDir) {
   cfg.loginBanAfter = cfg.loginBanAfter || 20;
   if (cfg.relay) {
     // the call relay (lib/relay.js): the name phones reach it by, and how long one credential lasts
-    cfg.relay = Object.assign({ ttlSeconds: 43200 }, cfg.relay);
+    cfg.relay = Object.assign({ ttlSeconds: 43200, transports: ['udp', 'tcp', 'tls'] }, cfg.relay);
+    const tr = cfg.relay.transports;
+    if (!Array.isArray(tr) || !tr.length || tr.some(x => !['udp', 'tcp', 'tls'].includes(x)) || new Set(tr).size !== tr.length) throw new Error('config.json relay.transports must list some of "udp", "tcp", "tls", each once');
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cfg.relay.host || '')) throw new Error('config.json relay.host must be the relay\'s DNS name, e.g. relay.pmcne.ph');
     const ttl = Number(cfg.relay.ttlSeconds);
     if (!Number.isInteger(ttl) || ttl < 600 || ttl > 86400) throw new Error('config.json relay.ttlSeconds must be a whole number from 600 to 86400');

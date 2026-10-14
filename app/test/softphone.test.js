@@ -191,6 +191,8 @@ test('call relay: time-limited TURN credentials, checked against openssl, on bot
   assert.notEqual(RELAY.iceServers(cfgR, 'shared-secret-2', '3904', 1760000000000)[0].credential, viaOpenssl, 'control: another secret, another credential');
   assert.deepEqual(ice[0].urls, ['turn:relay.test:3478?transport=udp', 'turn:relay.test:3478?transport=tcp', 'turns:relay.test:443?transport=tcp']);
   assert.deepEqual(RELAY.iceServers({}, 'x', '3904'), [], 'no relay configured');
+  // only the routes the gateway forwards are offered (a dead route stalls every call while the browser waits on it)
+  assert.deepEqual(RELAY.iceServers({ relay: { host: 'relay.test', ttlSeconds: 600, transports: ['tls'] } }, 's', '3904')[0].urls, ['turns:relay.test:443?transport=tcp']);
   assert.deepEqual(RELAY.iceServers(cfgR, '', '3904'), [], 'no secret yet');
   assert.match(RELAY.iceServers(cfgR, 's', '39;04<x>')[0].username, /^\d+:3904x$/, 'only the extension\'s characters reach the username');
   const sec = {};
@@ -205,7 +207,8 @@ test('call relay: time-limited TURN credentials, checked against openssl, on bot
     assert.throws(() => makeEnv({ relay }), why);
   }
   const okEnv = makeEnv({ relay: { host: 'relay.test' } });
-  try { assert.equal(okEnv.cfg.relay.ttlSeconds, 43200, 'default: 12 hours'); } finally { okEnv.cleanup(); }
+  try { assert.equal(okEnv.cfg.relay.ttlSeconds, 43200, 'default: 12 hours'); assert.deepEqual(okEnv.cfg.relay.transports, ['udp', 'tcp', 'tls'], 'default: all three routes'); } finally { okEnv.cleanup(); }
+  for (const transports of [[], ['sip'], ['tls', 'tls'], 'tls']) assert.throws(() => makeEnv({ relay: { host: 'relay.test', transports } }), /transports/);
 
   // the server: the phone's credentials carry the relay, and /api/relay refreshes it; Apply made the secret
   const env = makeEnv({ relay: { host: 'relay.test', ttlSeconds: 3600 } });
