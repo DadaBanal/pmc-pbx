@@ -84,6 +84,18 @@ test('the server hands out the install files before sign-in, with the right type
     }
     // control: a file that cannot exist is refused, so the 200s above mean something
     assert.equal((await request(A, 'GET', '/icons/no-such-icon-zz9.png', { noCsrf: true })).status, 404);
+    // the Android app's install page, and the APK once the deploy has put it there (14 Oct 2026)
+    let r = await request(A, 'GET', '/app', { noCsrf: true });
+    assert.equal(r.status, 200); assert.match(r.headers['content-type'], /^text\/html/); assert.match(r.text, /Download the app/);
+    const apkDir = path.join(__dirname, '..', 'public', 'app'), apk = path.join(apkDir, 'pmc-phone.apk');
+    const had = fs.existsSync(apk);
+    if (!had) assert.equal((await request(A, 'GET', '/app/pmc-phone.apk', { noCsrf: true })).status, 404, 'not deployed: nothing to download');
+    fs.mkdirSync(apkDir, { recursive: true });
+    if (!had) fs.writeFileSync(apk, Buffer.from('PK test'));
+    try {
+      r = await request(A, 'GET', '/app/pmc-phone.apk', { noCsrf: true });
+      assert.equal(r.status, 200); assert.equal(r.headers['content-type'], 'application/vnd.android.package-archive');
+    } finally { if (!had) fs.unlinkSync(apk); }
     // the internet-facing listener serves phones' files only, never the app
     assert.notEqual((await request(P, 'GET', '/manifest.webmanifest', { noCsrf: true })).status, 200);
   } finally { srv.close(); env.cleanup(); }

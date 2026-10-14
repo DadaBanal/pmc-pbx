@@ -279,7 +279,8 @@
       (message ? '<div class="banner err" role="alert">' + esc(message) + '</div>' : '') +
       '<form id="login"><div><label for="ln">Name</label><input id="ln" name="name" autocomplete="username" required autofocus></div>' +
       '<div><label for="lp">Password</label><input id="lp" name="password" type="password" autocomplete="current-password" required></div>' +
-      '<button class="primary" type="submit">Sign in</button></form></div></div>';
+      '<button class="primary" type="submit">Sign in</button></form>' +
+      (/Android/i.test(navigator.userAgent) && !NATIVE ? '<p class="why"><a href="/app">Get the PMC Phone app for Android</a>: calls ring even when your phone is locked.</p>' : '') + '</div></div>';
     $('#login').onsubmit = async ev => {
       ev.preventDefault(); const f = ev.target; const b = $('button', f); b.disabled = true; b.setAttribute('aria-busy', 'true');
       try { await api('POST', '/api/login', { name: f.name.value, password: f.password.value }); await boot(); }

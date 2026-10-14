@@ -139,7 +139,8 @@ function start(cfg, opts) {
     return out;
   }
   // what the phone site serves: the phone page and what it loads, nothing of the admin screen
-  const PHONE_SITE_FILES = /^\/(phone|phone\.html|phone\.js|sip\.js|style\.css|manifest\.webmanifest|sw\.js|icons\/[a-z0-9-]+\.png)$/;
+  // /app: the install page for the Android app; /app/pmc-phone.apk is put there by the deploy (not in git)
+  const PHONE_SITE_FILES = /^\/(app|app\.html|app\/pmc-phone\.apk|phone|phone\.html|phone\.js|sip\.js|style\.css|manifest\.webmanifest|sw\.js|icons\/[a-z0-9-]+\.png)$/;
   const phoneFromOk = ip => !cfg.phoneNetworks || H.inNetworks(ip, cfg.phoneNetworks);
   const NOT_HERE = 'PMC Phone is not available on this network.';
   const AD_SAY = new Set(['account disabled', 'account locked out', 'password expired', 'password must be changed', 'account expired', 'not allowed at this time', 'not allowed from this computer']);
@@ -413,7 +414,7 @@ function start(cfg, opts) {
         if (p === '/') { res.writeHead(302, { Location: '/phone' }); return res.end(); }
         if (!PHONE_SITE_FILES.test(p)) return H.sendText(res, 404, 'text/plain', 'not found');
       }
-      return H.serveStatic(res, PUBLIC_DIR, p === '/' ? '/index.html' : p === '/phone' ? '/phone.html' : p);
+      return H.serveStatic(res, PUBLIC_DIR, p === '/' ? '/index.html' : p === '/phone' ? '/phone.html' : p === '/app' ? '/app.html' : p);
     }
     if (req.method !== 'GET' && req.headers['x-pmc-pbx'] !== '1') return H.sendJson(res, 403, { error: 'missing X-PMC-PBX header' });
 
