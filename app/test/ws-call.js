@@ -113,6 +113,31 @@ const media = seen => ({ async create() { return {
   async offer() { return webrtcOffer(); }, async setAnswer(sdp) { seen.answer = sdp; }, async answerOffer() { return webrtcOffer(); },
   setDirection() {}, mute() {}, dtmf() {}, close() {}
 }; } });
+// one browser-shaped session that keeps its ICE and DTLS identity across re-INVITEs (hold), answers as DTLS active,
+// and puts the hold direction in its SDP, as a browser does
+const sessionMedia = () => ({ async create() {
+  const fp = crypto.randomBytes(32).toString('hex').toUpperCase().match(/../g).join(':');
+  const ufrag = crypto.randomBytes(4).toString('hex'), pwd = crypto.randomBytes(12).toString('hex');
+  let dir = 'sendrecv', ver = 2;
+  const sdp = setup => ['v=0', 'o=- 4242 ' + (ver++) + ' IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE 0', 'a=msid-semantic: WMS',
+    'm=audio 9 UDP/TLS/RTP/SAVPF 9 0 8 101', 'c=IN IP4 0.0.0.0', 'a=rtcp:9 IN IP4 0.0.0.0',
+    'a=candidate:1 1 udp 2122260223 127.0.0.1 40000 typ host generation 0', 'a=ice-ufrag:' + ufrag, 'a=ice-pwd:' + pwd,
+    'a=fingerprint:sha-256 ' + fp, 'a=setup:' + setup, 'a=mid:0', 'a=' + dir, 'a=rtcp-mux',
+    'a=rtpmap:9 G722/8000', 'a=rtpmap:0 PCMU/8000', 'a=rtpmap:8 PCMA/8000', 'a=rtpmap:101 telephone-event/8000', 'a=fmtp:101 0-16', ''].join('\r\n');
+  return { async offer() { return sdp('actpass'); }, async setAnswer() {}, async answerOffer() { return sdp('active'); },
+    setDirection(d) { dir = d; }, mute() {}, dtmf() {}, close() {} };
+} });
+// which bridge each PJSIP channel of an extension sits in, from the engine itself
+function bridgesOf(ext) {
+  const out = new Set();
+  for (const line of ast('core show channels concise').split('\n')) {
+    const f = line.split('!');
+    if (f[0] && f[0].startsWith('PJSIP/' + ext + '-') && f[12]) out.add(f[12]);
+  }
+  return out;
+}
+const together = (x, y) => { const bx = bridgesOf(x); return Array.from(bridgesOf(y)).some(b => bx.has(b)); };
+const channelsOf = ext => ast('core show channels concise').split('\n').filter(l => l.startsWith('PJSIP/' + ext + '-')).length;
 
 (async () => {
   // ---------------------------------------------------------------- set up through the admin API
@@ -198,6 +223,91 @@ const media = seen => ({ async create() { return {
   if (deskStatus !== 200) fail('CONTROL: desk phone ' + desk + ' could not register on 5061 (' + deskStatus + '), so the refusal above proves nothing');
   ok('control: desk phone ' + desk + ' registered on 5061 with its own password (200)');
 
-  console.log('VERDICT: PASS - the browser phone registers and calls through the gate on the real engine, and only through the gate; every control behaved');
+  // ---------------------------------------------------------------- modern functions on the real engine (14 Oct 2026)
+  // Three browser phones through the gate: A (ci.phone's own), B (twice: two devices), C. Every leg here carries no
+  // RTP, so the engine's rtp_timeout (30 s) bounds the whole section; it runs in well under that.
+  const addPhone = async name => {
+    const x = await api('POST', '/api/extensions', { name, dept: 'ICT', model: 'webphone' }, a.cookie);
+    if (x.status !== 200) fail('add ' + name + ': ' + x.status + ' ' + x.text);
+    return x.json.ext;
+  };
+  const extB = await addPhone('CI Phone B'), extC = await addPhone('CI Phone C');
+  r = await api('POST', '/api/apply', undefined, a.cookie);
+  if (r.status !== 200 || !r.json.ok) fail('apply B and C: ' + r.status + ' ' + r.text);
+  const sec2 = JSON.parse(fs.readFileSync(process.env.PMC_SECRETS || '/etc/pmc-pbx/secrets/secrets.json', 'utf8'));
+  const phone = (ext, password) => new SIP.UA({ ext, password, name: 'CI ' + ext, domain: creds.domain, wsUrl,
+    connect: (u, proto) => connect(u, proto, { cookie: p.cookie, origin: BASE }), media: sessionMedia(), log: s => process.env.SIP_DEBUG && console.log('  [' + ext + '] ' + s) });
+  const A = phone(creds.ext, creds.password), B = phone(extB, sec2.sip[extB]), B2 = phone(extB, sec2.sip[extB]), C = phone(extC, sec2.sip[extC]);
+  const rang = { B: [], B2: [], C: [], A: [] };
+  // B, C and A answer whatever rings, unless it is call waiting (the test answers those itself)
+  for (const [k, u] of [['A', A], ['B', B], ['B2', B2], ['C', C]]) u.on('incoming', c => { rang[k].push(c); if (!c.waiting && k !== 'B2') setTimeout(() => c.answer(), 200); });
+  for (const u of [A, B, B2, C]) u.start();
+  await until(() => [A, B, B2, C].every(u => u.state === 'registered'), 15000, 'four registrations').catch(e => fail(e.message));
+  ok('four browser phones registered: ' + creds.ext + ', ' + extB + ' on two devices, ' + extC);
+
+  // every device rings; the one that is not answered is told "answered elsewhere", not "missed"
+  const ab = await A.call(extB);
+  await until(() => rang.B.length && rang.B2.length, 8000, 'both of ' + extB + '\'s devices to ring').catch(() => fail('ring all: ' + extB + ' rang on ' + (rang.B.length + rang.B2.length) + ' of 2 devices - Dial is reaching only one'));
+  await until(() => ab.state === 'active', 8000, 'A to B answered').catch(e => fail(e.message));
+  await until(() => rang.B2[0].state === 'ended', 5000, 'the second device to stop ringing').catch(e => fail(e.message));
+  if (rang.B2[0].reason !== 'answered elsewhere') fail('the second device ended with "' + rang.B2[0].reason + '", expected "answered elsewhere"');
+  ok('both of ' + extB + '\'s devices rang; one answered, the other was told "answered elsewhere"');
+  await B2.stop();
+
+  // call waiting: C calls B while B talks to A; B holds A and answers C
+  const ba = rang.B[0];
+  const cb = await C.call(extB);
+  await until(() => rang.B.length === 2, 8000, 'the waiting call to reach B').catch(() => fail('call waiting: C\'s call never reached B (busy instead?) - ' + cb.state + ' ' + cb.reason));
+  const waiting = rang.B[1];
+  if (!waiting.waiting) fail('the second call to B was not marked as call waiting');
+  await ba.hold(true);
+  if (!ba.held) fail('B could not put A on hold on the real engine');
+  await waiting.answer();
+  await until(() => cb.state === 'active', 8000, 'C answered by B').catch(e => fail(e.message));
+  ok('call waiting: C rang through to B mid-call; B held A (re-INVITE accepted) and answered C');
+
+  // attended transfer: B connects A (held) to C and drops off
+  const t1 = await ba.transfer(null, waiting);
+  if (!t1.ok) fail('attended transfer refused by the engine: ' + t1.why);
+  await until(() => channelsOf(extB) === 0, 8000, 'B to leave both calls').catch(() => fail('after the attended transfer B still has ' + channelsOf(extB) + ' channel(s)'));
+  await until(() => together(creds.ext, extC), 5000, 'A and C bridged').catch(() => fail('after the attended transfer A and C are not in one bridge'));
+  if (ab.state !== 'active' || cb.state !== 'active') fail('a caller was dropped by the attended transfer (A ' + ab.state + ', C ' + cb.state + ')');
+  ok('attended transfer: A and C are bridged together, B has no channels left');
+
+  // blind transfer: A sends C straight to B
+  const t2 = await ab.transfer(extB);
+  if (!t2.ok) fail('blind transfer refused by the engine: ' + t2.why);
+  await until(() => channelsOf(creds.ext) === 0 && together(extC, extB), 8000, 'C bridged to B, A gone').catch(() => fail('after the blind transfer: A channels ' + channelsOf(creds.ext) + ', C with B ' + together(extC, extB)));
+  ok('blind transfer: C now talks to B; A dropped off');
+
+  // three-way call: B (talking to C) holds C, calls A, merges all three into room *88<B>
+  const bc = rang.B[rang.B.length - 1];
+  await bc.hold(true);
+  const ba2 = await B.call(creds.ext);
+  await until(() => ba2.state === 'active', 8000, 'B to A answered').catch(e => fail(e.message));
+  const roomNo = '*88' + extB;
+  const m1 = await ba2.transfer(roomNo), m2 = await bc.transfer(roomNo);
+  if (!m1.ok || !m2.ok) fail('moving the calls into the conference was refused: ' + (m1.why || m2.why));
+  const mine = await B.call(roomNo);
+  await until(() => mine.state === 'active', 8000, 'B to join its room').catch(e => fail('the owner could not join ' + roomNo + ': ' + mine.reason));
+  const members = () => (ast('confbridge list pmc' + extB).match(new RegExp('PJSIP/', 'g')) || []).length;
+  await until(() => members() === 3, 6000, 'three in the room').catch(() => fail('conference pmc' + extB + ' holds ' + members() + ' members, expected 3:\n' + ast('confbridge list pmc' + extB)));
+  ok('three-way call: B, A and C are all in conference pmc' + extB);
+  // CONTROL: someone who was not moved in by the owner is refused at the door
+  const intruder = await A.call(roomNo);
+  await until(() => intruder.state === 'ended' || intruder.state === 'active', 8000, 'the intruder\'s call').catch(e => fail(e.message));
+  if (intruder.state === 'active') fail('CONTROL: ' + creds.ext + ' dialled ' + roomNo + ' directly and was let in - the room is open to anyone');
+  if (members() !== 3) fail('CONTROL: the room now holds ' + members() + ' members');
+  ok('control: dialling ' + roomNo + ' directly from ' + creds.ext + ' was refused (' + intruder.reason + '); the room still holds 3');
+  // the owner leaves: the room closes for everyone, as a three-way call does
+  mine.hangup();
+  await until(() => !/PJSIP\//.test(ast('confbridge list pmc' + extB)) && channelsOf(creds.ext) + channelsOf(extC) === 0, 8000, 'the room to close').catch(() => fail('the owner left but the room still holds:\n' + ast('confbridge list pmc' + extB)));
+  ok('the owner hung up and the conference closed for everyone');
+  for (const u of [A, B, C]) await u.stop();
+  await new Promise(res => setTimeout(res, 1000));
+  if (!/^0 active call/m.test(ast('core show channels count'))) fail('channels left after the modern-function checks:\n' + ast('core show channels count'));
+  ok('no active calls left');
+
+  console.log('VERDICT: PASS - the browser phone registers and calls through the gate on the real engine, and only through the gate; ring-all, call waiting, both transfers and the three-way call work on the real engine; every control behaved');
   process.exit(0);
 })().catch(e => fail(e.stack || e.message));

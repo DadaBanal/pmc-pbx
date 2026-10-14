@@ -132,7 +132,7 @@ jobs:
           chmod 2750 /var/lib/pmc-pbx/out/asterisk
           node app/gen.js --conf /etc/pmc-pbx --out /var/lib/pmc-pbx/out
           ls -ln /var/lib/pmc-pbx/out/asterisk
-          cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf asterisk/conf/voicemail.conf /etc/asterisk/
+          cp asterisk/conf/pjsip.conf asterisk/conf/extensions.conf asterisk/conf/rtp.conf asterisk/conf/http.conf asterisk/conf/voicemail.conf asterisk/conf/confbridge.conf /etc/asterisk/
           chown -R asterisk:asterisk /etc/asterisk /var/run/asterisk
           /usr/sbin/asterisk -U asterisk -G asterisk
           for i in 1 2 3 4 5 6 7 8 9 10; do /usr/sbin/asterisk -rx 'core show version' >/dev/null 2>&1 && break; sleep 2; done
@@ -146,6 +146,8 @@ jobs:
           node app/test/ci-assert.js dialplan "$PMC_DIR" /tmp/dp.txt
           /usr/sbin/asterisk -rx 'voicemail show users for pmc' | tee /tmp/vm.txt
           grep -q '^pmc ' /tmp/vm.txt || { echo "no [pmc] mailboxes loaded"; exit 1; }
+          /usr/sbin/asterisk -rx 'confbridge show profile users' | tee /tmp/cb.txt
+          grep -q pmc_owner /tmp/cb.txt && grep -q pmc_guest /tmp/cb.txt || { echo "conference profiles not loaded"; exit 1; }
           echo "engine loaded the generated config: transport, every endpoint, dialplan, mailboxes"
 
       - name: the admin screen adds a phone, applies it, the engine shows it, the phone fetches its config

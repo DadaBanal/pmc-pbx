@@ -165,3 +165,28 @@ test('generate writes the files and a manifest', () => {
   assert.ok(!fs.existsSync(path.join(out, 'phones', '.cfg')));
   fs.rmSync(out, { recursive: true, force: true });
 });
+
+test('dialplan: every device a person is signed in on rings, and conference rooms admit only their owner and transfers', () => {
+  const cfg = { ringSeconds: 25 };
+  const dp = G.renderDialplan({ version: 1, extensions: [{ ext: '3904', name: 'A', dept: 'ICT' }] }, cfg);
+  const lines = dp.split('\n');
+  const at = s => lines.findIndex(l => l.includes(s));
+  // ring all contacts, with no-device and busy both reaching voicemail
+  assert.ok(at('Set(DEVICES=${PJSIP_DIAL_CONTACTS(${EXTEN})})') > at('exten => _[1-8]XXX,1'), 'contacts read inside the extension pattern');
+  assert.ok(at('GotoIf($["${DEVICES}" = ""]?unavail)') > at('Set(DEVICES='), 'no device signed in: straight to voicemail');
+  assert.match(dp, /^ same => n,Dial\(\$\{DEVICES\},25\)$/m);
+  assert.doesNotMatch(dp, /Dial\(PJSIP\/\$\{EXTEN\}/, 'the single-device Dial is gone');
+  assert.match(dp, /^ same => n\(unavail\),VoiceMail\(\$\{EXTEN\}@pmc,u\)$/m);
+  assert.match(dp, /^ same => n\(busy\),VoiceMail\(\$\{EXTEN\}@pmc,b\)$/m);
+  // the room: owner check, then the transfer check, then refusal - in that order, before either ConfBridge
+  const owner = at('GotoIf($["${CHANNEL(endpoint)}" = "${OWNER}"]?owner)');
+  const guest = at('GotoIf($["${CUT(BLINDTRANSFER,-,1)}" = "PJSIP/${OWNER}"]?guest)');
+  const refuse = at(' same => n,Hangup(21)');
+  assert.ok(at('exten => _*88XXXX,1') >= 0 && owner > at('exten => _*88XXXX,1') && guest > owner && refuse === guest + 1, 'owner, transfer, else refused');
+  assert.ok(at('n(owner),ConfBridge(pmc${OWNER},pmc_bridge,pmc_owner)') > refuse);
+  assert.ok(at('n(guest),ConfBridge(pmc${OWNER},pmc_bridge,pmc_guest)') > refuse);
+  // the profiles the dialplan names exist in the conference config the repo installs
+  const conf = require('fs').readFileSync(require('path').join(__dirname, '..', '..', 'asterisk', 'conf', 'confbridge.conf'), 'utf8');
+  for (const p of ['pmc_bridge', 'pmc_owner', 'pmc_guest']) assert.match(conf, new RegExp('^\\[' + p + '\\]$', 'm'), p + ' in confbridge.conf');
+  assert.match(conf, /^end_marked=yes/m, 'the room closes when its owner leaves');
+});

@@ -28,6 +28,15 @@
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M12 7v5l3 2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5v14l11-7z"/></symbol>
+  <symbol id="i-transfer" viewBox="0 0 24 24"><path d="M4 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 24 24"><path d="M6 4v4a6 6 0 0 0 6 6 6 6 0 0 0 6-6V4M12 14v6"/></symbol>
+  <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></symbol>
+  <symbol id="i-voicemail" viewBox="0 0 24 24"><path d="M6.5 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M17.5 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M6.5 15.5h11"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5"/></symbol>
 </svg>
 <header class="top">
   <a class="brand" href="/phone"><i></i>PMC Phone</a>
@@ -45,10 +54,12 @@
     <div class="in-actions">
       <button type="button" class="decline" id="in-decline"><svg class="ic" aria-hidden="true"><use href="#i-hang"></use></svg>Decline</button>
       <button type="button" class="answer" id="in-answer"><svg class="ic" aria-hidden="true"><use href="#i-phone"></use></svg>Answer</button>
+      <button type="button" class="answer hidden" id="in-hold"><svg class="ic" aria-hidden="true"><use href="#i-pause"></use></svg>Hold and answer</button>
+      <button type="button" class="answer alt hidden" id="in-end"><svg class="ic" aria-hidden="true"><use href="#i-hang"></use></svg>End and answer</button>
     </div>
   </div>
 </div>
-<audio id="remote" autoplay></audio>
+<div id="audios" hidden></div>
 <footer>PMC Phone &mdash; your desk phone, in the browser.</footer>
 <script src="/sip.js"></script>
 <script src="/phone.js"></script>

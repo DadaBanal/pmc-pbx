@@ -224,11 +224,28 @@ function renderDialplan(dir, cfg) {
   L.push(' same => n,Hangup()');
   L.push('; hints for BLF');
   for (const e of dir.extensions) L.push('exten => ' + e.ext + ',hint,PJSIP/' + e.ext);
-  L.push('; extension to extension');
+  // three-way calls and conferences (14 Oct 2026, Dada: "three way calling conferenfce"). Room *88<ext> belongs to
+  // that extension. Only its owner, and the calls the owner transfers in (a blind transfer sets BLINDTRANSFER on the
+  // transferred channel to the transferring channel's name), may join; anyone else who dials it is refused. When the
+  // owner leaves, the room closes (end_marked in confbridge.conf), as a three-way call on a desk phone does.
+  L.push('; three-way calls and conferences: room *88<ext>, owner and the calls the owner transfers in only');
+  L.push('exten => _*88XXXX,1,NoOp(PMC conference of ${EXTEN:3})');
+  L.push(' same => n,Set(OWNER=${EXTEN:3})');
+  L.push(' same => n,GotoIf($["${CHANNEL(endpoint)}" = "${OWNER}"]?owner)');
+  L.push(' same => n,GotoIf($["${CUT(BLINDTRANSFER,-,1)}" = "PJSIP/${OWNER}"]?guest)');
+  L.push(' same => n,Hangup(21)');
+  L.push(' same => n(owner),ConfBridge(pmc${OWNER},pmc_bridge,pmc_owner)');
+  L.push(' same => n,Hangup()');
+  L.push(' same => n(guest),ConfBridge(pmc${OWNER},pmc_bridge,pmc_guest)');
+  L.push(' same => n,Hangup()');
+  L.push('; extension to extension: every device the person is signed in on rings (a browser on the PC and one on');
+  L.push('; the mobile both ring; Dial(PJSIP/ext) rings only the first one the engine finds)');
   L.push('exten => _[1-8]XXX,1,NoOp(PMC call ${CALLERID(num)} -> ${EXTEN})');
-  L.push(' same => n,Dial(PJSIP/${EXTEN},' + (cfg.ringSeconds || 25) + ')');
+  L.push(' same => n,Set(DEVICES=${PJSIP_DIAL_CONTACTS(${EXTEN})})');
+  L.push(' same => n,GotoIf($["${DEVICES}" = ""]?unavail)');
+  L.push(' same => n,Dial(${DEVICES},' + (cfg.ringSeconds || 25) + ')');
   L.push(' same => n,GotoIf($["${DIALSTATUS}" = "BUSY"]?busy)');
-  L.push(' same => n,VoiceMail(${EXTEN}@pmc,u)');
+  L.push(' same => n(unavail),VoiceMail(${EXTEN}@pmc,u)');
   L.push(' same => n,Hangup()');
   L.push(' same => n(busy),VoiceMail(${EXTEN}@pmc,b)');
   L.push(' same => n,Hangup()');

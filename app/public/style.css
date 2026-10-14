@@ -268,8 +268,40 @@ dialog#pal::backdrop{background:rgb(10 12 18/.35);-webkit-backdrop-filter:blur(3
    status chip was cut off by the extension number beside it (the card shows the number anyway) */
 .phone-page{display:flex;flex-direction:column;min-height:100vh} .phone-page main{flex:1 0 auto;width:100%}
 @media (max-width:480px){.phone-page header.top .who .mono{display:none} .phone-page #status{white-space:nowrap}}
-.phone-grid{display:grid;grid-template-columns:minmax(300px,400px) 1fr;gap:16px;align-items:start}
-@media (max-width:820px){.phone-grid{grid-template-columns:1fr}}
+.phone-grid{display:grid;grid-template-columns:minmax(300px,400px) minmax(0,1fr);grid-template-rows:auto auto 1fr;gap:12px 16px;align-items:start}
+.phone-grid>.dialer{grid-column:1;grid-row:1 / span 3}
+.phone-grid>.tabs,.phone-grid>.callbar,.phone-grid>.lists{grid-column:2}
+.tabs{display:flex;gap:4px;padding:4px;border-radius:var(--r-lg);background:var(--well);box-shadow:var(--well-shadow);position:sticky;top:6px;z-index:6}
+.tabs .tab{flex:1 1 0;min-width:0;min-height:48px;flex-direction:column;gap:2px;padding:6px 2px;font-size:12px;font-weight:600;border:0;border-radius:var(--r);background:transparent;color:var(--ink-2);box-shadow:none}
+.tabs .tab span{overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.tabs .tab .ic{width:18px;height:18px}
+.tabs .tab:hover{background:var(--surface-3);color:var(--ink)}
+.tabs .tab[aria-selected=true]{background:var(--accent-bg);color:var(--accent)}
+.tabs .tab.live{color:var(--ok)} .tabs .tab.live[aria-selected=true]{background:var(--ok-bg)}
+.callbar{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:48px;padding:8px 14px;border:0;border-radius:var(--r);background:var(--ok-bg);color:var(--ok);font-weight:600;white-space:normal;text-align:left}
+.callbar:hover{background:var(--ok-bg);filter:brightness(1.1)}
+.callbar.held{background:var(--warn-bg);color:var(--warn)}
+.callbar .cb-calls{display:flex;flex-direction:column;gap:2px;min-width:0}
+.callbar .cb-item{display:flex;align-items:center;gap:6px;color:var(--ink);font-weight:500;min-width:0}
+.callbar .cb-item b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.callbar .dot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:0 0 auto;color:var(--ok)}
+.callbar.held .dot{color:var(--warn)}
+.callbar .cb-go{flex:0 0 auto;text-decoration:underline}
+.quick{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.qd{position:relative}
+.qd-call{width:100%;min-height:76px;flex-direction:column;align-items:flex-start;justify-content:center;gap:4px;padding:12px 40px 12px 14px;border-radius:var(--r-lg);background:var(--l1) padding-box,var(--l1-edge) border-box;border:1px solid transparent;color:var(--ink);box-shadow:var(--l1-shadow);white-space:normal;text-align:left}
+.qd-call:hover{box-shadow:var(--l1-hover);background:var(--l1) padding-box,var(--l1-edge) border-box}
+.qd-name{font-weight:700;font-size:15px}
+.qd-ext{color:var(--ink-2);font-size:12px;font-weight:500}
+.qd-x{position:absolute;top:2px;right:2px;width:44px;height:44px}
+.qd-x .ic{width:14px;height:14px}
+.book-list li{display:flex;align-items:center}
+.book-list li .person{flex:1;min-width:0}
+.book-list .star{flex:0 0 auto;width:44px;height:44px;color:var(--ink-3)}
+.book-list .star[aria-pressed=true]{color:var(--warn)}
+.book-list .star[aria-pressed=true] .ic{fill:currentColor}
+.lists .empty{color:var(--ink-3);padding:10px 4px}
+@media (max-width:820px){.phone-grid{grid-template-columns:minmax(0,1fr);grid-template-rows:none} .phone-grid>*{grid-column:1!important;grid-row:auto!important} .book-list,.book-list.recent{max-height:none}}
 .dialer .sub{margin-bottom:12px}
 .numbox{display:flex;align-items:center;gap:6px;background:var(--well);box-shadow:var(--well-shadow);border-radius:var(--r-lg);padding:6px 6px 6px 14px}
 .numbox .num{flex:1;min-width:0;border:0;background:transparent;box-shadow:none;font-size:30px;font-weight:600;letter-spacing:1px;padding:6px 0;color:var(--ink)}
@@ -296,10 +328,32 @@ dialog#pal::backdrop{background:rgb(10 12 18/.35);-webkit-backdrop-filter:blur(3
 .oc-num{color:var(--ink-2);margin-top:2px}
 .oc-state{display:inline-flex;align-items:center;gap:8px;margin-top:10px;padding:4px 12px;border-radius:999px;background:var(--ok-bg);color:var(--ok);font-weight:600}
 .oc-state .dot{width:8px;height:8px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
-.controls{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
+.controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0}
 .controls .ctl{flex-direction:column;gap:4px;min-height:64px;border-radius:var(--r-lg);background:var(--l1) padding-box,var(--l1-edge) border-box;border:1px solid transparent;color:var(--ink);box-shadow:var(--l1-shadow);font-size:12px}
 .controls .ctl .ic{width:20px;height:20px}
 .controls .ctl[aria-pressed=true]{background:var(--accent-bg);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.controls .ctl[disabled]{opacity:.45}
+.controls .ctl.out{display:flex;align-items:center;justify-content:center;cursor:pointer;font-weight:600;padding:6px;min-width:0;overflow:hidden}
+.controls .ctl.out select{width:100%;max-width:100%;min-width:0;border:0;background:transparent;box-shadow:none;color:var(--ink-2);font:inherit;font-size:11px;font-weight:500;text-align:center;text-align-last:center;padding:0;cursor:pointer;text-overflow:ellipsis}
+.controls .ctl.out:focus-within{box-shadow:var(--l1-shadow),0 0 0 3px var(--ring)}
+.oc-state.held{background:var(--warn-bg);color:var(--warn)}
+.otherline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%;min-height:44px;padding:8px 12px;border:0;border-radius:var(--r);background:var(--warn-bg);color:var(--ink);font-size:13px;font-weight:500;justify-content:flex-start;white-space:normal;text-align:left}
+.otherline:hover{background:var(--warn-bg);filter:brightness(1.1)}
+.otherline[disabled]{opacity:1;cursor:default}
+.otherline .ol-go{margin-left:auto;display:inline-flex;align-items:center;gap:4px;color:var(--warn);font-weight:700}
+.otherline .ol-state{color:var(--warn);font-weight:700}
+.otherline b{font-weight:600}
+.modehead{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:0 0 10px;color:var(--ink-2);font-weight:600}
+.modehead .ic{margin-right:6px}
+.linkbtn{background:transparent;border:0;color:var(--accent);padding:6px 4px;min-height:44px;font-weight:600}
+.linkbtn:hover{background:transparent;text-decoration:underline}
+.xfer-actions{display:flex;flex-direction:column;align-items:center;gap:10px;margin:8px 0}
+.xfer-actions button{min-width:220px;min-height:48px}
+.minirow{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:4px 0 0}
+.pill{min-height:44px;border-radius:999px;background:transparent;border:1px solid var(--glass-line);color:var(--ink-2);font-size:13px;padding:6px 14px}
+.pill:hover{background:var(--surface-3);border-color:var(--glass-line);color:var(--ink)}
+.pill[aria-checked=true]{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
+.incoming .answer.alt{background:var(--warn);box-shadow:0 12px 30px -12px var(--warn)}
 .book .search{display:flex;align-items:center;gap:8px;background:var(--well);box-shadow:var(--well-shadow);border-radius:var(--r);padding:0 10px;margin-bottom:10px}
 .book .search .ic{width:16px;height:16px;color:var(--ink-3)}
 .book .search input{border:0;background:transparent;box-shadow:none;padding:10px 0}
@@ -324,5 +378,6 @@ dialog#pal::backdrop{background:rgb(10 12 18/.35);-webkit-backdrop-filter:blur(3
 .in-ring .ic{width:32px;height:32px}
 .in-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
 .in-actions button{min-width:150px}
+@media (max-width:480px){.in-actions{flex-direction:column;align-items:stretch} .in-actions button{min-width:0;width:100%}}
 @media (prefers-reduced-motion:no-preference){.in-ring{animation:ringpulse 1.2s ease-in-out infinite}}
 @keyframes ringpulse{0%,100%{box-shadow:0 0 0 0 var(--ok-bg)}50%{box-shadow:0 0 0 16px transparent}}

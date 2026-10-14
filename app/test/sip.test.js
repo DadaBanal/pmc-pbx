@@ -100,6 +100,15 @@ function harness(opts) {
           }
           if (m.method === 'INVITE') return reply(m, 200, 'OK', [], 'v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 0\r\na=recvonly\r\n');
           if (m.method === 'BYE') return reply(m, 200, 'OK');
+          if (m.method === 'REFER') {
+            reply(m, 202, 'Accepted');
+            const frag = opts.referFrag || 'SIP/2.0 200 OK';
+            setImmediate(() => {
+              server.push(inDialogFromEngine('NOTIFY', m, 'Event: refer\r\nSubscription-State: terminated;reason=noresource\r\nContent-Type: message/sipfrag;version=2.0', frag + '\r\n'));
+              if (/^SIP\/2\.0 2/.test(frag) && !opts.referNoBye) setImmediate(() => server.push(inDialogFromEngine('BYE', m, '', '')));
+            });
+            return undefined;
+          }
           return undefined; // ACK, responses
         },
         close() { if (this.onclose) this.onclose(); }
@@ -111,6 +120,13 @@ function harness(opts) {
     last(method) { return got.filter(m => m.method === method || (m.status && method === m.status)).pop(); }
   };
   return server;
+}
+// a request the engine sends inside the dialog of request m (which this phone sent): From and To swap sides
+let engineCseq = 100;
+function inDialogFromEngine(method, m, extra, body) {
+  return method + ' sip:abc@x.invalid;transport=ws SIP/2.0\r\nVia: SIP/2.0/WS 127.0.0.1:8088;branch=z9hG4bKeng' + (engineCseq++) + '\r\n' +
+    'From: ' + m.headers.to[0] + '\r\nTo: ' + m.headers.from[0] + '\r\nCall-ID: ' + m.headers['call-id'][0] + '\r\nCSeq: ' + engineCseq + ' ' + method + '\r\n' +
+    (extra ? extra + '\r\n' : '') + 'Content-Length: ' + Buffer.byteLength(body) + '\r\n\r\n' + body;
 }
 const fakeMedia = () => {
   const log = [];
@@ -339,5 +355,131 @@ test('a challenge that arrives after the caller hung up does not ring the far en
   ws.onmessage({ data: SIP.build('SIP/2.0 401 Unauthorized', h, '') });
   await new Promise(r => setTimeout(r, 40));
   assert.equal(srv.got.filter(m => m.method === 'INVITE').length, 1, 'no second INVITE after the hang-up');
+  await ua.stop();
+});
+
+// ------------------------------------------------------------------------------------------- modern phone functions, 14 Oct 2026
+// Dada: "we need to add modern function call waiting call on hold etc whatever is missing"
+const uaFor = (srv, media, o) => new SIP.UA(Object.assign({ ext: '1201', password: 'pw-1234567', domain: 'pbx', wsUrl: 'x', connect: () => srv.connect(), media: media || fakeMedia() }, o || {}));
+
+test('call waiting: a second call rings while one is up, a third is busy; do not disturb sends calls to busy', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = uaFor(srv);
+  const rejected = [];
+  ua.on('rejected', (c, why) => rejected.push(why));
+  ua.start(); await until(() => ua.state === 'registered');
+  const first = await ua.call('1202'); await until(() => first.state === 'active');
+  const second = await ringingCall(srv, ua, 'cw-2');
+  assert.equal(second.waiting, true, 'marked as call waiting');
+  assert.ok(srv.got.some(m => m.status === 180 && m.headers['call-id'][0] === 'cw-2'), 'the waiting call is told 180 Ringing');
+  assert.deepEqual(finals(srv, 'cw-2'), [], 'and gets no busy');
+  srv.push(inviteText('cw-3'));
+  await until(() => finals(srv, 'cw-3').length);
+  assert.deepEqual(finals(srv, 'cw-3'), [486], 'a third call is busy');
+  assert.deepEqual(rejected, ['busy']);
+  second.decline(); first.hangup();
+  await until(() => ua.calls.size === 0);
+  ua.dnd = true;
+  srv.push(inviteText('cw-4'));
+  await until(() => finals(srv, 'cw-4').length);
+  assert.deepEqual(finals(srv, 'cw-4'), [486], 'do not disturb: busy, so the caller reaches voicemail');
+  assert.deepEqual(rejected, ['busy', 'do not disturb']);
+  // control: with do not disturb off the same call rings
+  ua.dnd = false;
+  const fifth = await ringingCall(srv, ua, 'cw-5');
+  assert.equal(fifth.waiting, false, 'nothing else up: an ordinary call');
+  assert.deepEqual(finals(srv, 'cw-5'), []);
+  await ua.stop();
+});
+
+test('hold silences this phone before the re-INVITE goes out; resume restores audio unless muted', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const media = fakeMedia();
+  const ua = uaFor(srv, media);
+  ua.start(); await until(() => ua.state === 'registered');
+  const call = await ua.call('1202'); await until(() => call.state === 'active');
+  media.log.length = 0;
+  await call.hold(true);
+  assert.deepEqual(media.log.slice(0, 3), ['mute:true', 'dir:sendonly', 'offer'], 'silenced first, then the hold offer');
+  await call.hold(false);
+  assert.equal(media.log.filter(x => x.startsWith('mute:')).pop(), 'mute:false', 'resumed: audio flows again');
+  call.mute(true);
+  await call.hold(true); await call.hold(false);
+  assert.equal(media.log.filter(x => x.startsWith('mute:')).pop(), 'mute:true', 'muted before the hold: still muted after it');
+  call.mute(false);
+  call.aside(true);
+  assert.equal(media.log.filter(x => x.startsWith('mute:')).pop(), 'mute:true', 'set aside: silent without a hold');
+  call.aside(false);
+  assert.equal(media.log.filter(x => x.startsWith('mute:')).pop(), 'mute:false');
+  await ua.stop();
+});
+
+test('transfer to a number: REFER in the dialog, Refer-To and Referred-By exact, ends as transferred', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = uaFor(srv);
+  ua.start(); await until(() => ua.state === 'registered');
+  const call = await ua.call('1202'); await until(() => call.state === 'active');
+  const r = await call.transfer('1203');
+  assert.deepEqual(r, { ok: true });
+  const refer = srv.last('REFER');
+  assert.equal(refer.uri, 'sip:srv@127.0.0.1:8088;transport=ws', 'sent to the far end\'s Contact, inside the dialog');
+  assert.equal(refer.headers['refer-to'][0], '<sip:1203@pbx>');
+  assert.equal(refer.headers['referred-by'][0], '<sip:1201@pbx>');
+  assert.ok(refer.headers.contact && refer.headers.contact[0], 'REFER carries a Contact (RFC 3515)');
+  assert.equal(refer.headers['call-id'][0], call.callId);
+  await until(() => call.state === 'ended');
+  assert.equal(call.reason, 'transferred');
+  assert.ok(srv.got.some(m => m.status === 200 && /NOTIFY/.test(m.headers.cseq[0])), 'the NOTIFY is answered');
+  await ua.stop();
+});
+
+test('a transfer the engine refuses leaves the call up and says why', async () => {
+  const srv = harness({ password: 'pw-1234567', referFrag: 'SIP/2.0 404 Not Found' });
+  const ua = uaFor(srv);
+  ua.start(); await until(() => ua.state === 'registered');
+  const call = await ua.call('1202'); await until(() => call.state === 'active');
+  const r = await call.transfer('1299');
+  assert.deepEqual(r, { ok: false, why: 'not found' });
+  assert.equal(call.state, 'active', 'still talking to the same person');
+  assert.equal(call.referring, null);
+  call.hangup();
+  await ua.stop();
+});
+
+test('attended transfer: Refer-To carries Replaces with the other call\'s dialog, tags taken from the wire', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = uaFor(srv);
+  ua.start(); await until(() => ua.state === 'registered');
+  const a = await ua.call('1202'); await until(() => a.state === 'active');
+  await a.hold(true);
+  const b = await ua.call('1203'); await until(() => b.state === 'active');
+  // the tags as they crossed the wire: ours in the From of b's INVITE, the engine's in the To of its 200 OK
+  const bInvite = srv.got.filter(m => m.method === 'INVITE' && m.headers['call-id'][0] === b.callId).pop();
+  const ourTag = SIP.tagOf(bInvite.headers.from[0]);
+  const engineTag = 'srv' + b.callId.slice(0, 4); // what harness() put in the To of its 200
+  const r = await a.transfer(null, b);
+  assert.deepEqual(r, { ok: true });
+  const refer = srv.last('REFER');
+  assert.equal(refer.headers['call-id'][0], a.callId, 'the REFER goes to the person on hold');
+  const want = '<sip:1203@pbx?Replaces=' + encodeURIComponent(b.callId + ';to-tag=' + engineTag + ';from-tag=' + ourTag) + '>';
+  assert.equal(refer.headers['refer-to'][0], want);
+  // control: the same header with the tags swapped is a different header - the order is what the engine matches on
+  assert.notEqual(refer.headers['refer-to'][0], '<sip:1203@pbx?Replaces=' + encodeURIComponent(b.callId + ';to-tag=' + ourTag + ';from-tag=' + engineTag) + '>');
+  assert.equal((await a.transfer(null, a)).ok, false, 'a call cannot be transferred onto itself');
+  await ua.stop();
+});
+
+test('ringing on several devices: a CANCEL with Reason cause=200 is "answered elsewhere", a plain CANCEL is missed', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = uaFor(srv);
+  ua.start(); await until(() => ua.state === 'registered');
+  const c1 = await ringingCall(srv, ua, 'else-1');
+  srv.push(cancelText('else-1').replace('CSeq: 10 CANCEL\r\n', 'CSeq: 10 CANCEL\r\nReason: SIP;cause=200;text="Call completed elsewhere"\r\n'));
+  await until(() => c1.state === 'ended');
+  assert.equal(c1.reason, 'answered elsewhere');
+  const c2 = await ringingCall(srv, ua, 'else-2');
+  srv.push(cancelText('else-2'));
+  await until(() => c2.state === 'ended');
+  assert.equal(c2.reason, 'missed', 'control: no Reason header, a missed call');
   await ua.stop();
 });

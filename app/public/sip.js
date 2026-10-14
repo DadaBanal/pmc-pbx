@@ -10,7 +10,10 @@
    a scripted SDP, which lets a real Asterisk prove the signalling without a browser.
 
    What it does: REGISTER with digest auth and refresh; outgoing and incoming calls; ring, answer, decline,
-   cancel, hang up; hold and resume by re-INVITE; DTMF; answers OPTIONS so the engine sees it as reachable. */
+   cancel, hang up; hold and resume by re-INVITE; DTMF; answers OPTIONS so the engine sees it as reachable.
+   Since 14 Oct 2026 (Dada: "we need to add modern function call waiting call on hold etc whatever is missing"):
+   call waiting (a second call rings instead of getting busy), do not disturb, transfer by REFER - straight to a
+   number or onto another call (RFC 3515, 5589, 3891) - and a held call that hears nothing from this phone. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api; else root.PMCSip = api;
@@ -82,7 +85,7 @@
   }
 
   // ------------------------------------------------------------------------------------------------ messages
-  const COMPACT = { v: 'via', f: 'from', t: 'to', i: 'call-id', m: 'contact', l: 'content-length', c: 'content-type', k: 'supported' };
+  const COMPACT = { v: 'via', f: 'from', t: 'to', i: 'call-id', m: 'contact', l: 'content-length', c: 'content-type', k: 'supported', o: 'event', r: 'refer-to', b: 'referred-by' };
   function parse(text) {
     const cut = text.indexOf('\r\n\r\n');
     const head = cut < 0 ? text : text.slice(0, cut);
@@ -135,6 +138,8 @@
     408: 'not answering', 487: 'cancelled', 401: 'not authorised', 403: 'not allowed', 407: 'not authorised',
     488: 'could not agree on audio', 503: 'the phone system is busy', 500: 'the phone system failed'
   };
+  // what the engine said about a transfer, in words; the sipfrag in its NOTIFY carries one of these codes
+  const nfo = s => REASONS[s] || ('the phone system answered ' + s);
   const ALLOW = 'INVITE, ACK, CANCEL, BYE, OPTIONS, INFO, NOTIFY, MESSAGE';
 
   // ------------------------------------------------------------------------------------------------ the user agent
@@ -148,6 +153,8 @@
       this.retryMs = o.retryMs || 60000;          // after a refused REGISTER
       this.regTimeoutMs = o.regTimeoutMs || 32000; // REGISTER with no final answer: the connection is dead
       this.deniedRetryMs = o.deniedRetryMs || 120000; // a refused password is tried again, slowly
+      this.maxCalls = o.maxCalls || 2;            // call waiting: one call up and one ringing; a third gets busy
+      this.dnd = false;                           // do not disturb: new calls get busy, so they go to voicemail
       this.handlers = {};
       this.host = rand(12) + '.invalid';
       this.contact = '<sip:' + rand(8) + '@' + this.host + ';transport=ws>';
@@ -203,9 +210,8 @@
         ['Max-Forwards', '70'],
         ['To', o.to], ['From', o.from], ['Call-ID', o.callId], ['CSeq', o.cseq + ' ' + method],
         ['Contact', o.contact], ['Expires', o.expires], ['Authorization', o.authorization], ['Proxy-Authorization', o.proxyAuthorization],
-        ['Allow', method === 'ACK' || method === 'CANCEL' ? '' : ALLOW], ['User-Agent', 'PMC-Phones/1'],
-        ['Content-Type', o.body ? 'application/sdp' : '']
-      ];
+        ['Allow', method === 'ACK' || method === 'CANCEL' ? '' : ALLOW], ['User-Agent', 'PMC-Phones/1']
+      ].concat(o.extra || [], [['Content-Type', o.body ? 'application/sdp' : '']]);
       return { branch, text: build(method + ' ' + ruri + ' SIP/2.0', headers, o.body) };
     }
     respond(req, status, reason, o) {
@@ -304,19 +310,27 @@
         case 'ACK': if (call) call.onAck(msg); return;
         case 'CANCEL': {
           this.respond(msg, 200, 'OK');
-          if (call && call.dir === 'in' && (call.state === 'ringing' || call.state === 'connecting')) call.cancelled();
+          // ringing on several of the person's devices: the engine cancels the others with Reason cause=200 when
+          // one answers (RFC 3326). That is not a missed call.
+          const elsewhere = /cause\s*=\s*200\b/i.test((msg.headers.reason || []).join(','));
+          if (call && call.dir === 'in' && (call.state === 'ringing' || call.state === 'connecting')) call.cancelled(elsewhere ? 'answered elsewhere' : 'missed');
           return;
         }
         case 'BYE':
           this.respond(msg, call ? 200 : 481, call ? 'OK' : 'Call Does Not Exist');
-          if (call) call.ended('the other side hung up');
+          if (call && call.referring) call.referring.finish({ ok: true }); // the engine ends our leg once the transfer holds
+          if (call) call.ended(call.transferred || call.referring === false ? 'transferred' : 'the other side hung up');
           return;
-        case 'INFO': case 'NOTIFY': case 'MESSAGE': return this.respond(msg, 200, 'OK');
+        case 'NOTIFY':
+          this.respond(msg, 200, 'OK');
+          if (call && /^refer/i.test(hdr(msg, 'event'))) call.onReferNotify(msg);
+          return;
+        case 'INFO': case 'MESSAGE': return this.respond(msg, 200, 'OK');
         default: return this.respond(msg, 405, 'Method Not Allowed', { allow: true });
       }
     }
     onIncoming(invite) {
-      const busy = Array.from(this.calls.values()).some(c => c.state !== 'ended');
+      const live = Array.from(this.calls.values()).filter(c => c.state !== 'ended');
       const c = new Call(this, 'in');
       c.callId = hdr(invite, 'call-id');
       c.localTag = rand(10);
@@ -328,7 +342,12 @@
       c.remoteCseq = cseqOf(invite).n;
       c.number = userOf(uriOf(c.remoteUri));
       c.name = nameOf(c.remoteUri);
-      if (busy) { this.respond(invite, 486, 'Busy Here', { toTag: c.localTag }); return; }
+      if (this.dnd || live.length >= this.maxCalls) {
+        this.respond(invite, 486, 'Busy Here', { toTag: c.localTag });
+        this.emit('rejected', c, this.dnd ? 'do not disturb' : 'busy');
+        return;
+      }
+      c.waiting = live.length > 0; // call waiting: this phone is already on a call
       this.calls.set(c.callId, c);
       c.state = 'ringing';
       this.respond(invite, 180, 'Ringing', { toTag: c.localTag, contact: this.contact });
@@ -365,7 +384,8 @@
   // ------------------------------------------------------------------------------------------------ a call
   class Call {
     constructor(ua, dir) {
-      this.ua = ua; this.dir = dir; this.state = 'new'; this.reason = ''; this.muted = false; this.held = false;
+      this.ua = ua; this.dir = dir; this.state = 'new'; this.reason = ''; this.muted = false; this.held = false; this.asideOn = false;
+      this.referring = null; this.transferred = false; this.holding = false;
       this.number = ''; this.name = ''; this.startedAt = 0; this.endedAt = 0; this.cseq = 0; this.session = null;
       this.okTimer = null; this.inviteBranch = ''; this.remoteSdpSet = false;
     }
@@ -425,10 +445,10 @@
       this.ua.send(build('CANCEL ' + this.ruri + ' SIP/2.0', headers, ''));
     }
     // ---------------- in-dialog requests we send
-    inDialog(method, body, onResponse) {
+    inDialog(method, body, onResponse, extra) {
       this.cseq++;
       const r = this.ua.request(method, this.remoteTarget, { to: this.remoteUri, from: this.localUri, callId: this.callId, cseq: this.cseq,
-        contact: method === 'INVITE' ? this.ua.contact : '', body });
+        contact: method === 'INVITE' || method === 'REFER' ? this.ua.contact : '', body, extra });
       if (onResponse) this.ua.tx.set(r.branch, { method, onResponse: res => onResponse(res, r.branch) });
       this.ua.send(r.text);
     }
@@ -461,7 +481,7 @@
       this.ua.respond(this.invite, 486, 'Busy Here', { toTag: this.localTag });
       this.ended('declined');
     }
-    cancelled() { this.ua.respond(this.invite, 487, 'Request Terminated', { toTag: this.localTag }); this.ended('missed'); }
+    cancelled(why) { this.ua.respond(this.invite, 487, 'Request Terminated', { toTag: this.localTag }); this.ended(why || 'missed'); }
     onAck() { this.acked = true; clearTimeout(this.okTimer); if (this.byeAfterAck) { this.byeAfterAck = false; this.sendBye(); } }
     async onReinvite(req) {
       // the far end changed the media: hold music, resume, a codec change
@@ -493,28 +513,92 @@
       if (this.state === 'active') this.sendBye();
       this.ended('hung up');
     }
+    // what the far end hears from this phone: nothing while muted, held or set aside
+    sendAudio() { if (this.session) this.session.mute(this.muted || this.held || this.asideOn); }
     async hold(on) {
-      if (this.state !== 'active' || !!on === this.held) return;
+      if (this.state !== 'active' || !!on === this.held || this.holding) return;
+      this.holding = true; this.ua.emit('update', this);
+      // a held call must not hear this phone: before 14 Oct 2026 hold only changed the SDP direction, so the person on
+      // hold could hear your next call
+      if (on && this.session) this.session.mute(true);
       this.session.setDirection(on ? 'sendonly' : 'sendrecv');
-      const offer = await this.session.offer();
-      await new Promise(resolve => {
-        this.inDialog('INVITE', offer, async (res, branch) => {
-          if (res.status < 200) return;
-          if (res.status < 300) {
-            const ack = this.ua.request('ACK', this.remoteTarget, { to: this.remoteUri, from: this.localUri, callId: this.callId, cseq: this.cseq });
-            this.ua.send(ack.text);
-            try { await this.session.setAnswer(res.body); } catch (e) { /* keep the call */ }
-            this.held = !!on;
-          } else { this.ackFailure(res, branch, this.remoteTarget); this.session.setDirection(this.held ? 'sendonly' : 'sendrecv'); }
-          this.ua.emit('update', this);
-          resolve();
+      try {
+        const offer = await this.session.offer();
+        await new Promise(resolve => {
+          this.inDialog('INVITE', offer, async (res, branch) => {
+            if (res.status < 200) return;
+            if (res.status < 300) {
+              const ack = this.ua.request('ACK', this.remoteTarget, { to: this.remoteUri, from: this.localUri, callId: this.callId, cseq: this.cseq });
+              this.ua.send(ack.text);
+              try { await this.session.setAnswer(res.body); } catch (e) { /* keep the call */ }
+              this.held = !!on;
+            } else { this.ackFailure(res, branch, this.remoteTarget); this.session.setDirection(this.held ? 'sendonly' : 'sendrecv'); }
+            resolve();
+          });
         });
+      } finally {
+        this.holding = false;
+        this.sendAudio();
+        this.ua.emit('update', this);
+      }
+    }
+    // stop sending audio without a hold: a conference stays live for the others while you take another call
+    aside(on) { this.asideOn = !!on; this.sendAudio(); this.ua.emit('update', this); }
+    mute(on) { this.muted = !!on; this.sendAudio(); this.ua.emit('update', this); }
+    // ---------------- transfer
+    // number: send the far end to that number (blind). other: connect the far end to the person on that other call
+    // (attended; Refer-To carries Replaces with the other call's dialog, RFC 3891: to-tag is the engine's tag on it,
+    // from-tag ours). Resolves { ok, why } once the engine's NOTIFY says how it went, or 30 s pass.
+    transfer(number, other) {
+      const no = why => Promise.resolve({ ok: false, why });
+      if (this.state !== 'active') return no('the call is not connected');
+      if (this.referring) return no('a transfer is already under way');
+      let target;
+      if (other) {
+        if (other === this || other.state !== 'active' || !other.remoteTag) return no('the other call is not connected');
+        const replaces = encodeURIComponent(other.callId + ';to-tag=' + other.remoteTag + ';from-tag=' + other.localTag);
+        target = 'sip:' + (other.number || 'transfer') + '@' + this.ua.domain + '?Replaces=' + replaces;
+      } else {
+        const n = String(number || '').replace(/[^0-9*#+]/g, '');
+        if (!n) return no('no number to transfer to');
+        target = 'sip:' + n + '@' + this.ua.domain;
+      }
+      return new Promise(resolve => {
+        let timer = null;
+        const finish = r => {
+          if (!this.referring) return;
+          clearTimeout(timer);
+          this.referring = r.ok ? false : null;
+          if (r.ok) {
+            this.transferred = true;
+            // the engine normally ends our leg itself; if it has not within 3 s, end it (RFC 5589 6.1)
+            const t = setTimeout(() => { if (this.state === 'active') { this.sendBye(); this.ended('transferred'); } }, 3000);
+            if (typeof t === 'object' && t.unref) t.unref();
+          }
+          this.ua.emit('update', this);
+          resolve(r);
+        };
+        this.referring = { finish, target };
+        timer = setTimeout(() => finish({ ok: false, why: 'the phone system did not confirm the transfer' }), 30000);
+        if (typeof timer === 'object' && timer.unref) timer.unref();
+        this.ua.emit('update', this);
+        this.inDialog('REFER', '', res => {
+          if (res.status >= 300) finish({ ok: false, why: nfo(res.status) });
+          // 202 Accepted: the outcome follows in NOTIFY
+        }, [['Refer-To', '<' + target + '>'], ['Referred-By', '<sip:' + this.ua.ext + '@' + this.ua.domain + '>']]);
       });
     }
-    mute(on) { this.muted = !!on; if (this.session) this.session.mute(this.muted); this.ua.emit('update', this); }
+    onReferNotify(msg) {
+      if (!this.referring) return;
+      const m = /^SIP\/2\.0\s+(\d{3})/m.exec(msg.body || '');
+      if (!m || Number(m[1]) < 200) return; // 100 Trying, 180 Ringing: still going
+      const code = Number(m[1]);
+      this.referring.finish(code < 300 ? { ok: true } : { ok: false, why: nfo(code) });
+    }
     dtmf(digit) { if (this.state === 'active' && this.session && /^[0-9*#A-D]$/.test(digit)) this.session.dtmf(digit); }
     ended(reason, status) {
       if (this.state === 'ended') return;
+      if (this.referring) this.referring.finish({ ok: false, why: 'the call ended before the transfer was confirmed' });
       this.reason = reason || this.reason; this.status = status || 0;
       this.endedAt = Date.now();
       clearTimeout(this.okTimer);
