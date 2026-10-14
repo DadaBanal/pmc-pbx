@@ -39,6 +39,9 @@ for f in confbridge.conf musiconhold.conf voicemail.conf; do
   sudo -n install -o asterisk -g asterisk -m 0644 asterisk/conf/$f /etc/asterisk/$f
 done
 sudo -n install -o root -g root -m 0755 vm/pmc-moh-radio.sh /usr/local/bin/pmc-moh-radio
+sudo -n install -d -o asterisk -g asterisk -m 0755 /var/lib/asterisk/moh-radio
+sudo -n -u asterisk touch /var/lib/asterisk/moh-radio/pmc-placeholder.raw   # see musiconhold.conf
+sudo -n touch /etc/asterisk/musiconhold.conf   # a reload of an unchanged file is skipped
 echo "--- regenerate the dialplan and reload, as the Apply button does"
 $APP app/admin.js apply
 for m in app_confbridge.so res_musiconhold.so app_voicemail.so; do echo "module reload $m: $($AS "module reload $m" | tr -d '\n')"; done
