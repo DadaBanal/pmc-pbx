@@ -571,9 +571,10 @@
           this.referring = r.ok ? false : null;
           if (r.ok) {
             this.transferred = true;
-            // the engine normally ends our leg itself; if it has not within 3 s, end it (RFC 5589 6.1)
-            const t = setTimeout(() => { if (this.state === 'active') { this.sendBye(); this.ended('transferred'); } }, 3000);
-            if (typeof t === 'object' && t.unref) t.unref();
+            // leave the transferred call now (RFC 5589 6.1: the transferor sends BYE once the NOTIFY says 2xx). Asterisk
+            // defers ending it until we do (res_pjsip_refer.c); before 14 Oct 09:2x this phone waited 3 s, and a call
+            // arriving in those 3 s rang as call waiting (CI run on fa94338: B's call to A was never answered)
+            if (this.state === 'active') { this.sendBye(); this.ended('transferred'); }
             // attended: this phone leaves the other call too (RFC 5589: the transferor ends both dialogs). Without it a
             // call the engine has already handed over stays up here, and the next call rings as call waiting or busy
             // (CI run 38491835492, 14 Oct 2026: the blind transfer that followed never reached B)

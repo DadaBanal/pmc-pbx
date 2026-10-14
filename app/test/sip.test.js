@@ -433,6 +433,21 @@ test('transfer to a number: REFER in the dialog, Refer-To and Referred-By exact,
   await ua.stop();
 });
 
+test('after a confirmed transfer the phone leaves the call at once, so the next call is not call waiting', async () => {
+  const srv = harness({ password: 'pw-1234567', referNoBye: true }); // Asterisk waits for the transferor's BYE
+  const ua = uaFor(srv);
+  ua.start(); await until(() => ua.state === 'registered');
+  const call = await ua.call('1202'); await until(() => call.state === 'active');
+  const r = await call.transfer('1203');
+  assert.deepEqual(r, { ok: true });
+  await until(() => call.state === 'ended', 500); // not 3 s
+  assert.equal(call.reason, 'transferred');
+  assert.ok(srv.got.some(m => m.method === 'BYE' && m.headers['call-id'][0] === call.callId), 'the phone sent the BYE');
+  const next = await ringingCall(srv, ua, 'after-xfer');
+  assert.equal(next.waiting, false, 'a call straight after the transfer rings as an ordinary call');
+  await ua.stop();
+});
+
 test('a transfer the engine refuses leaves the call up and says why', async () => {
   const srv = harness({ password: 'pw-1234567', referFrag: 'SIP/2.0 404 Not Found' });
   const ua = uaFor(srv);
