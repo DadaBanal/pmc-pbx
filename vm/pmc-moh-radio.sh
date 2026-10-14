@@ -15,9 +15,10 @@
 # with a few seconds of buffered audio, then a fresh connection.
 #
 # Stations, both checked from PMC-PBX01 as user asterisk on 14 Oct 2026 (HTTP 200 / redirect, audio/mpeg, MP3 frames):
+# Order: Dada, 14 Oct 2026 09:2x, "can we shift it to the opm station first then the 2000's as the fallback".
 STATIONS=(
+  "http://ais-edge50-live365-dal02.cdnstream.com/a63316"  # "MYX P-Pop Radio": Filipino pop / OPM hits, 128 kbps
   "https://0n-2000s.radionetz.de/0n-2000s.mp3"            # "0 N - 2000s on Radio": English 2000s hits, 128 kbps
-  "http://ais-edge50-live365-dal02.cdnstream.com/a63316"  # "MYX P-Pop Radio": Filipino pop, 128 kbps
 )
 # ROLLBACK: restore /etc/asterisk/musiconhold.conf from its .pre-radio-* copy, then
 #   asterisk -rx 'module reload res_musiconhold.so'     (the bundled music files come back; this script stops)
