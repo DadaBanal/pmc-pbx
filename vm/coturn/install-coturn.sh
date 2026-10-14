@@ -24,7 +24,7 @@ REPO=/opt/pmc-pbx
 SRC=$HOME/coturn-src
 GH=$SRC/coturn-4.18.0.tar.gz
 DEB=$SRC/coturn_4.18.0.orig.tar.xz
-GH_SHA=28d55294ac596fbd129b293a85e7bb1c5dc4bd15b7fb55c500f355149e5f4e2
+GH_SHA=28d55294ac596fbd129b293a85e7bb1c5dc4bd15b7fb55c500f355149e5f4e28
 DEB_SHA=4e1c4cfa758f7c862852dadbdd492c3c1293c16b25bbc81f6200aea7cc20456b
 fail() { echo "STOP: $*"; exit 1; }
 
