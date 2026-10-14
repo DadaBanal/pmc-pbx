@@ -50,3 +50,19 @@ test('engine output parsers read the real CLI formats', () => {
   assert.equal(ct[1].status, 'NonQual');
   assert.equal(ct[1].rtt, null);
 });
+
+test('sign-in pauses: a limit of 0 switches the pause off; any other limit still pauses', () => {
+  const H = require('../lib/httpx');
+  const off = new H.BanList(0, 900, 900);
+  for (let i = 0; i < 50; i++) off.fail('john.yang');
+  assert.equal(off.isBanned('john.yang'), false, 'switched off: never paused');
+  const on = new H.BanList(5, 900, 900);
+  for (let i = 0; i < 4; i++) on.fail('x');
+  assert.equal(on.isBanned('x'), false, 'four wrong: not yet');
+  on.fail('x');
+  assert.equal(on.isBanned('x'), true, 'control: the fifth pauses when the limit is 5');
+  const { makeEnv } = require('./helpers');
+  const a = makeEnv({ accountBanAfter: 0 }), b = makeEnv({});
+  try { assert.equal(a.cfg.accountBanAfter, 0, '0 stays 0: off'); assert.equal(b.cfg.accountBanAfter, 5, 'unset: the default 5'); }
+  finally { a.cleanup(); b.cleanup(); }
+});

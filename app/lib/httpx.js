@@ -81,8 +81,10 @@ function inNetworks(ip, cidrs) {
 
 class BanList {
   constructor(after, windowSec, banSec) { this.after = after; this.windowMs = windowSec * 1000; this.banMs = banSec * 1000; this.map = new Map(); }
-  isBanned(ip) { const f = this.map.get(ip); return !!(f && f.bannedUntil > Date.now()); }
+  // after <= 0: switched off, never bans (Dada, 14 Oct 2026: "remove the 15 minute coold own fro now")
+  isBanned(ip) { if (this.after <= 0) return false; const f = this.map.get(ip); return !!(f && f.bannedUntil > Date.now()); }
   fail(ip) {
+    if (this.after <= 0) return false;
     const now = Date.now();
     let f = this.map.get(ip);
     if (!f || now - f.first > this.windowMs) f = { count: 0, first: now, bannedUntil: 0 };

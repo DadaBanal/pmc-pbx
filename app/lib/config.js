@@ -77,7 +77,8 @@ function loadConfig(confDir) {
   cfg.emergency = Object.assign({ departments: ['ICT'], extensions: [] }, cfg.emergency || {});
   if (!Array.isArray(cfg.emergency.departments) || !Array.isArray(cfg.emergency.extensions) ||
       cfg.emergency.extensions.some(x => !/^\d{3,6}$/.test(String(x)))) throw new Error('config.json emergency must be { "departments": [names], "extensions": ["3903", ...] }');
-  cfg.accountBanAfter = cfg.accountBanAfter || 5;
+  // 0 switches the per-name pause off (config.json "accountBanAfter": 0); the per-address limit stays
+  cfg.accountBanAfter = cfg.accountBanAfter === 0 ? 0 : (cfg.accountBanAfter || 5);
   cfg.accountBanWindowSec = cfg.accountBanWindowSec || 900;
   cfg.accountBanSec = cfg.accountBanSec || 900;
   return cfg;
