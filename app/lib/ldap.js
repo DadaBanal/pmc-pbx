@@ -49,10 +49,11 @@ const text = (buf, t) => buf.toString('utf8', t.start, t.end);
 const num = (buf, t) => { let n = 0; for (let i = t.start; i < t.end; i++) n = n * 256 + buf[i]; return n; };
 
 // ------------------------------------------------------------------ filters (RFC 4511 section 4.5.1)
-// { and: [...] } | { eq: [attr, value] } | { inChain: [attr, dn] } (AD's LDAP_MATCHING_RULE_IN_CHAIN, nested groups)
+// { and: [...] } | { or: [...] } | { eq: [attr, value] } | { inChain: [attr, dn] } (AD's LDAP_MATCHING_RULE_IN_CHAIN)
 const IN_CHAIN = '1.2.840.113556.1.4.1941';
 function filter(f) {
   if (f.and) return seq(0xa0, f.and.map(filter));
+  if (f.or) return seq(0xa1, f.or.map(filter));
   if (f.eq) return seq(0xa3, [str(0x04, f.eq[0]), str(0x04, f.eq[1])]);
   if (f.inChain) return seq(0xa9, [str(0x81, IN_CHAIN), str(0x82, f.inChain[0]), str(0x83, f.inChain[1])]);
   throw new Error('unsupported filter');
@@ -179,13 +180,20 @@ async function checkPerson(ad, typed, password) {
   try {
     const b = await c.bind(sam + ad.upnSuffix, password);
     if (!b.ok) return { ok: false, reason: b.reason };
+    // the account AD just signed in: what was typed may be its sAMAccountName (dan.yang) or the first part of its
+    // userPrincipalName (dpy, for dpy@pmcne.ph). AD resolves the explicit UPN first, so a UPN match wins.
+    const who = await c.search(ad.baseDN, { and: [{ eq: ['objectClass', 'user'] }, { or: [{ eq: ['sAMAccountName', sam] }, { eq: ['userPrincipalName', sam + ad.upnSuffix] }] }] },
+      ['sAMAccountName', 'userPrincipalName'], 3);
+    const upnHit = who.find(x => String(((x.attrs.userPrincipalName || [])[0]) || '').toLowerCase() === (sam + ad.upnSuffix).toLowerCase());
+    const hit = upnHit || who.find(x => String(((x.attrs.sAMAccountName || [])[0]) || '').toLowerCase() === sam);
+    const real = hit ? String((hit.attrs.sAMAccountName || [sam])[0]).toLowerCase() : sam;
     for (const group of ad.groups) {
       const g = await c.search(ad.baseDN, { and: [{ eq: ['objectClass', 'group'] }, { eq: ['cn', group] }] }, ['distinguishedName'], 2);
       if (g.length !== 1) continue;
-      const u = await c.search(ad.baseDN, { and: [{ eq: ['sAMAccountName', sam] }, { inChain: ['memberOf', g[0].dn] }] }, ['sAMAccountName', 'displayName'], 2);
+      const u = await c.search(ad.baseDN, { and: [{ eq: ['sAMAccountName', real] }, { inChain: ['memberOf', g[0].dn] }] }, ['sAMAccountName', 'displayName'], 2);
       if (u.length === 1) {
         const a = u[0].attrs;
-        return { ok: true, sam, name: ((a.displayName || [])[0] || sam), group };
+        return { ok: true, sam: real, name: ((a.displayName || [])[0] || real), group };
       }
     }
     return { ok: false, reason: 'not in ' + ad.groups.join(' or ') };

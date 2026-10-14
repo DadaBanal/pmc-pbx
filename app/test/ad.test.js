@@ -22,7 +22,9 @@ const PEOPLE = {
   'ana.reyes': { password: 'Right-Passw0rd', name: 'Ana Reyes', groups: ['PMO Team'] },
   'ben.cruz': { password: 'Right-Passw0rd', name: 'Ben Cruz', groups: ['PMO Team'] },
   'outsider': { password: 'Right-Passw0rd', name: 'Out Sider', groups: [] },
-  'locked.one': { password: 'Right-Passw0rd', name: 'Locked One', groups: ['PMO Team'], sub: '775' }
+  'locked.one': { password: 'Right-Passw0rd', name: 'Locked One', groups: ['PMO Team'], sub: '775' },
+  // the shape of dan.yang on DND-AD01 (14 Oct 2026): sAMAccountName dan.yang, userPrincipalName dpy@pmcne.ph
+  'dan.yang': { password: 'Right-Passw0rd', name: 'Dan Patrick Yang', groups: ['PMO Team'], upn: 'dpy' }
 };
 
 async function boot(extra) {
@@ -136,6 +138,22 @@ test('the directory check: password by bind, then group membership; refusals tha
     assert.deepEqual([r.ok, r.reason], [false, 'account locked out']);
     r = await ldap.checkPerson(ad, 'nobody.here', 'x');
     assert.deepEqual([r.ok, r.reason], [false, 'no such user']);
+
+    // a sign-in name that differs from the account name (dpy@pmcne.ph is dan.yang): both forms reach the same account
+    // and its groups. Before 14 Oct 11:2x "dpy" passed AD's password check, then was refused "not in" the groups.
+    r = await ldap.checkPerson(ad, 'dpy', 'Right-Passw0rd');
+    assert.deepEqual([r.ok, r.sam, r.name], [true, 'dan.yang', 'Dan Patrick Yang'], 'by the first part of the UPN');
+    r = await ldap.checkPerson(ad, 'dan.yang', 'Right-Passw0rd');
+    assert.deepEqual([r.ok, r.sam], [true, 'dan.yang'], 'by the account name');
+    r = await ldap.checkPerson(ad, 'dpy@pmcne.ph', 'Right-Passw0rd');
+    assert.deepEqual([r.ok, r.sam], [true, 'dan.yang'], 'by the whole UPN');
+    r = await ldap.checkPerson(ad, 'dpy', 'wrong');
+    assert.deepEqual([r.ok, r.reason], [false, 'wrong password'], 'control: the right name with the wrong password');
+    // a comma is not part of any Windows name: refused before the directory is asked
+    const before = dc.seen.binds.length;
+    r = await ldap.checkPerson(ad, 'john,yang', 'Right-Passw0rd');
+    assert.deepEqual([r.ok, r.reason], [false, 'not a domain account name']);
+    assert.equal(dc.seen.binds.length, before, 'a malformed name never reaches the directory');
 
     // an empty password is an anonymous bind that AD calls success: it must never be sent
     const binds = dc.seen.binds.length, conns = dc.seen.connections;
@@ -402,4 +420,20 @@ test('the sync command reads its input to the end even when it arrives in pieces
     assert.equal(code, 0, err + out);
     assert.match(out, /would add: user\.0, .*user\.39/);
   } finally { env.cleanup(); }
+});
+
+test('sign-in names: a comma says so and suggests the name; the UPN form signs in as the account', { skip, timeout: 60000 }, async () => {
+  const t = await boot();
+  try {
+    let r = await signIn(t.A, 'john,yang', 'anything');
+    assert.equal(r.status, 400, 'not "wrong name or password": the name itself is wrong');
+    assert.match(r.json.error, /not a Windows sign-in name/);
+    assert.match(r.json.error, /Did you mean john\.yang\?/);
+    r = await signIn(t.A, 'dpy', 'Right-Passw0rd');
+    assert.equal(r.status, 200, r.text);
+    r = await request(t.A, 'GET', '/api/me', { cookie: r.cookie });
+    assert.equal(r.json.name, 'dan.yang', 'signed in as the account AD signed in, not as what was typed');
+    r = await signIn(t.A, 'ana.reyes', 'wrong');
+    assert.equal(r.status, 401, 'control: a real name with a wrong password is still "wrong name or password"');
+  } finally { t.stop(); }
 });

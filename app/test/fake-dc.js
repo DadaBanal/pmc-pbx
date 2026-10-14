@@ -28,13 +28,26 @@ function fakeDc(cert, key, people) {
   const done = (id, tag, code, diag) => L.seq(0x30, [L.int(0x02, id), L.seq(tag, [L.tlv(0x0a, Buffer.from([code])), L.str(0x04, ''), L.str(0x04, diag || '')])]);
   const entry = (id, dn, attrs) => L.seq(0x30, [L.int(0x02, id), L.seq(0x64, [L.str(0x04, dn), L.seq(0x30,
     Object.entries(attrs).map(([k, v]) => L.seq(0x30, [L.str(0x04, k), L.seq(0x31, [L.str(0x04, v)])])))])]);
-  // the filter's leaves, flattened: [{ kind: 'eq'|'inChain', attr, value }]
-  function leaves(buf, t, out) {
-    if (t.tag === 0xa0) { for (const c of L.children(buf, t)) leaves(buf, c, out); return out; }
+  // The directory as AD would hold it: the group, and each person with sAMAccountName and userPrincipalName (people[sam]
+  // .upn when it differs, as dan.yang's dpy@pmcne.ph does on DND-AD01). Searches are evaluated like AD's: and, or,
+  // case-insensitive equality, and LDAP_MATCHING_RULE_IN_CHAIN on memberOf (14 Oct 2026: the old stand-in flattened
+  // filters, so it could not show the "dpy" group-check bug).
+  const objects = [{ dn: GROUP_DN, attrs: { objectClass: ['group'], cn: ['PMO Team'], distinguishedName: [GROUP_DN] } }]
+    .concat(Object.entries(people).map(([sam, p]) => ({
+      dn: 'CN=' + p.name + ',OU=Staff,DC=pmcne,DC=ph',
+      attrs: { objectClass: ['user'], sAMAccountName: [sam], userPrincipalName: [(p.upn || sam) + '@pmcne.ph'], displayName: [p.name] },
+      groups: (p.groups || []).includes('PMO Team') ? [GROUP_DN] : []
+    })));
+  function test(buf, t, o) {
     const c = L.children(buf, t);
-    if (t.tag === 0xa3) out.push({ kind: 'eq', attr: L.text(buf, c[0]), value: L.text(buf, c[1]) });
-    else if (t.tag === 0xa9) out.push({ kind: 'inChain', rule: L.text(buf, c[0]), attr: L.text(buf, c[1]), value: L.text(buf, c[2]) });
-    return out;
+    if (t.tag === 0xa0) return c.every(x => test(buf, x, o));
+    if (t.tag === 0xa1) return c.some(x => test(buf, x, o));
+    if (t.tag === 0xa3) {
+      const want = L.text(buf, c[1]).toLowerCase();
+      return (o.attrs[L.text(buf, c[0])] || []).some(v => String(v).toLowerCase() === want);
+    }
+    if (t.tag === 0xa9) return L.text(buf, c[0]) === '1.2.840.113556.1.4.1941' && L.text(buf, c[1]) === 'memberOf' && (o.groups || []).includes(L.text(buf, c[2]));
+    return false;
   }
   const server = tls.createServer({ cert, key }, rawSock => {
     seen.connections++;
@@ -52,21 +65,23 @@ function fakeDc(cert, key, people) {
           const [, nameT, pwT] = L.children(buf, op);
           const name = L.text(buf, nameT), pw = L.text(buf, pwT);
           seen.binds.push(name);
-          const sam = name.replace(/@pmcne\.ph$/i, '');
-          const p = people[sam];
+          // like AD: the explicit UPN first, then the implicit one (sAMAccountName@domain)
+          const pre = name.replace(/@pmcne\.ph$/i, '').toLowerCase();
+          const sam = Object.keys(people).find(s => (people[s].upn || '').toLowerCase() === pre) || Object.keys(people).find(s => s.toLowerCase() === pre);
+          const p = sam ? people[sam] : undefined;
           if (p && p.password === pw && !p.sub) { bound = sam; sock.write(done(id, 0x61, 0)); }
           else sock.write(done(id, 0x61, 49, '80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data ' + ((p && p.password === pw && p.sub) || (p ? '52e' : '525')) + ', v4563'));
         } else if (op.tag === 0x63) {
           seen.searches++;
           if (!bound) { sock.write(done(id, 0x65, 1, '000004DC: LdapErr: DSID-0C090A5C, comment: In order to perform this operation a successful bind must be completed')); }
           else {
-            const f = leaves(buf, L.children(buf, op)[6], []);
-            const get = a => (f.find(x => x.kind === 'eq' && x.attr === a) || {}).value;
-            if (get('objectClass') === 'group' && get('cn') === 'PMO Team') sock.write(entry(id, GROUP_DN, { distinguishedName: GROUP_DN }));
-            const chain = f.find(x => x.kind === 'inChain');
-            const sam = get('sAMAccountName');
-            if (sam && chain && chain.rule === '1.2.840.113556.1.4.1941' && chain.value === GROUP_DN && people[sam] && people[sam].groups.includes('PMO Team')) {
-              sock.write(entry(id, 'CN=' + people[sam].name + ',OU=Staff,DC=pmcne,DC=ph', { sAMAccountName: sam, displayName: people[sam].name }));
+            const parts = L.children(buf, op);
+            const want = L.children(buf, parts[7]).map(x => L.text(buf, x));
+            for (const o of objects) {
+              if (!test(buf, parts[6], o)) continue;
+              const out = {};
+              for (const a of want) if (o.attrs[a]) out[a] = o.attrs[a][0];
+              sock.write(entry(id, o.dn, out));
             }
             sock.write(done(id, 0x65, 0));
           }

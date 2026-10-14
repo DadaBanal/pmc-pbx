@@ -477,6 +477,12 @@ function start(cfg, opts) {
       fail('AD: ' + r.reason);
       if (/^not in /.test(r.reason)) return H.sendJson(res, 403, { error: 'Your Windows account is not on the phone list. Ask PMO ICT.' });
       if (AD_SAY.has(r.reason)) return H.sendJson(res, 401, { error: 'Windows says: ' + r.reason + '.' });
+      if (r.reason === 'not a domain account name') {
+        // e.g. "john,yang" from a password manager entry (14 Oct 2026): say so, and suggest the likely name
+        const guess = String(name || '').trim().toLowerCase().replace(/[,\s]+/g, '.').replace(/@.*$/, '');
+        const hint = /^[a-z0-9][a-z0-9._-]{0,63}$/.test(guess) && guess !== String(name || '').trim().toLowerCase() ? ' Did you mean ' + guess + '?' : '';
+        return H.sendJson(res, 400, { error: '"' + String(name || '').slice(0, 64) + '" is not a Windows sign-in name. Use the name you sign in to a hospital PC with, like john.yang.' + hint });
+      }
       return H.sendJson(res, 401, { error: 'wrong name or password' });
     }
     accountBans.clear(acct);
