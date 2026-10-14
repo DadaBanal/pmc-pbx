@@ -574,6 +574,13 @@
             // the engine normally ends our leg itself; if it has not within 3 s, end it (RFC 5589 6.1)
             const t = setTimeout(() => { if (this.state === 'active') { this.sendBye(); this.ended('transferred'); } }, 3000);
             if (typeof t === 'object' && t.unref) t.unref();
+            // attended: this phone leaves the other call too (RFC 5589: the transferor ends both dialogs). Without it a
+            // call the engine has already handed over stays up here, and the next call rings as call waiting or busy
+            // (CI run 38491835492, 14 Oct 2026: the blind transfer that followed never reached B)
+            if (other) {
+              const t2 = setTimeout(() => { if (other.state === 'active') other.hangup(); }, 2000);
+              if (typeof t2 === 'object' && t2.unref) t2.unref();
+            }
           }
           this.ua.emit('update', this);
           resolve(r);

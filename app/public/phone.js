@@ -497,9 +497,7 @@
     const r = await heldCall.transfer(null, current);
     S.busy = false;
     if (r.ok) {
-      toast('Connected ' + a + ' and ' + b + '.', 'ok');
-      // the engine normally ends this leg too; if not, this phone does (RFC 5589: the transferor leaves both dialogs)
-      setTimeout(() => { if (current.state === 'active') current.hangup(); }, 3000);
+      toast('Connected ' + a + ' and ' + b + '.', 'ok'); // sip.js leaves both calls (RFC 5589)
     } else toast('Could not transfer: ' + r.why + '. Both calls are still yours.', 'bad');
     drawCallZone();
   }

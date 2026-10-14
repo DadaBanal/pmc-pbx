@@ -235,8 +235,16 @@ const channelsOf = ext => ast('core show channels concise').split('\n').filter(l
   r = await api('POST', '/api/apply', undefined, a.cookie);
   if (r.status !== 200 || !r.json.ok) fail('apply B and C: ' + r.status + ' ' + r.text);
   const sec2 = JSON.parse(fs.readFileSync(process.env.PMC_SECRETS || '/etc/pmc-pbx/secrets/secrets.json', 'utf8'));
+  const sipLog = {};
   const phone = (ext, password) => new SIP.UA({ ext, password, name: 'CI ' + ext, domain: creds.domain, wsUrl,
-    connect: (u, proto) => connect(u, proto, { cookie: p.cookie, origin: BASE }), media: sessionMedia(), log: s => process.env.SIP_DEBUG && console.log('  [' + ext + '] ' + s) });
+    connect: (u, proto) => connect(u, proto, { cookie: p.cookie, origin: BASE }), media: sessionMedia(),
+    log: s => { (sipLog[ext] = sipLog[ext] || []).push(new Date().toISOString().slice(17, 23) + ' ' + s); if (process.env.SIP_DEBUG) console.log('  [' + ext + '] ' + s); } });
+  const uaCalls = u => Array.from(u.calls.values()).filter(c => c.state !== 'ended').map(c => c.dir + ' ' + c.number + ' ' + c.state + (c.held ? ' held' : '') + (c.waiting ? ' waiting' : ''));
+  const NL = String.fromCharCode(10);
+  const evidence = () => NL + '  engine channels:' + NL + '    ' + ast('core show channels concise').trim().split(NL).join(NL + '    ') +
+    NL + '  live calls on each phone: A [' + uaCalls(A).join('; ') + '] B [' + uaCalls(B).join('; ') + '] C [' + uaCalls(C).join('; ') + ']' +
+    NL + '  calls that rang B: ' + rang.B.map(c => c.number + ' ' + c.state + (c.waiting ? ' waiting' : '') + (c.reason ? ' (' + c.reason + ')' : '')).join('; ') +
+    NL + '  B\'s last SIP lines:' + NL + '    ' + (sipLog[extB] || []).slice(-25).join(NL + '    ');
   const A = phone(creds.ext, creds.password), B = phone(extB, sec2.sip[extB]), B2 = phone(extB, sec2.sip[extB]), C = phone(extC, sec2.sip[extC]);
   const rang = { B: [], B2: [], C: [], A: [] };
   // B, C and A answer whatever rings, unless it is call waiting (the test answers those itself)
@@ -272,12 +280,14 @@ const channelsOf = ext => ast('core show channels concise').split('\n').filter(l
   await until(() => channelsOf(extB) === 0, 8000, 'B to leave both calls').catch(() => fail('after the attended transfer B still has ' + channelsOf(extB) + ' channel(s)'));
   await until(() => together(creds.ext, extC), 5000, 'A and C bridged').catch(() => fail('after the attended transfer A and C are not in one bridge'));
   if (ab.state !== 'active' || cb.state !== 'active') fail('a caller was dropped by the attended transfer (A ' + ab.state + ', C ' + cb.state + ')');
-  ok('attended transfer: A and C are bridged together, B has no channels left');
+  await until(() => uaCalls(B).length === 0, 6000, 'phone B to let go of both calls').catch(() => fail('after the attended transfer the engine holds no channel for B, but phone B still holds calls' + evidence()));
+  ok('attended transfer: A and C are bridged together, B has no channels left, and phone B let go of both calls (the call to A: ' +
+    ba.reason + '; the call with C: ' + waiting.reason + ' - "the other side hung up" means the engine ended it, "hung up" means the phone did)');
 
   // blind transfer: A sends C straight to B
   const t2 = await ab.transfer(extB);
   if (!t2.ok) fail('blind transfer refused by the engine: ' + t2.why);
-  await until(() => channelsOf(creds.ext) === 0 && together(extC, extB), 8000, 'C bridged to B, A gone').catch(() => fail('after the blind transfer: A channels ' + channelsOf(creds.ext) + ', C with B ' + together(extC, extB)));
+  await until(() => channelsOf(creds.ext) === 0 && together(extC, extB), 8000, 'C bridged to B, A gone').catch(() => fail('after the blind transfer: A channels ' + channelsOf(creds.ext) + ', C with B ' + together(extC, extB) + evidence()));
   ok('blind transfer: C now talks to B; A dropped off');
 
   // three-way call: B (talking to C) holds C, calls A, merges all three into room *88<B>

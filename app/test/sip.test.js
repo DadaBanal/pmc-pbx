@@ -466,6 +466,11 @@ test('attended transfer: Refer-To carries Replaces with the other call\'s dialog
   // control: the same header with the tags swapped is a different header - the order is what the engine matches on
   assert.notEqual(refer.headers['refer-to'][0], '<sip:1203@pbx?Replaces=' + encodeURIComponent(b.callId + ';to-tag=' + ourTag + ';from-tag=' + engineTag) + '>');
   assert.equal((await a.transfer(null, a)).ok, false, 'a call cannot be transferred onto itself');
+  // the scripted engine hangs up only the call the REFER went to; this phone must leave the other one itself
+  // (RFC 5589), or the next call to it rings as call waiting (CI run 38491835492)
+  await until(() => b.state === 'ended', 3500);
+  assert.equal(b.reason, 'hung up');
+  assert.ok(srv.got.some(m => m.method === 'BYE' && m.headers['call-id'][0] === b.callId), 'a BYE for the consultation call');
   await ua.stop();
 });
 
