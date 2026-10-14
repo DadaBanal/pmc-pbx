@@ -3,11 +3,14 @@
 # backdoors to anything else". The browser phone is reachable from the internet; nothing else on this machine is,
 # and a compromise of this machine must not become a way into the hospital LAN.
 #
-#   in, from anywhere      10.2.0.11 tcp 443 (phone site + its WebSocket), 10.2.0.11 udp 10000-10999 (call audio)
+#   in, from anywhere      10.2.0.11 tcp 443 (phone site + its WebSocket), 10.2.0.11 udp 10000-10999 (call audio),
+#                          10.2.0.12 tcp 443 + tcp/udp 3478 (the call relay, coturn; 14 Oct 2026)
 #   in, hospital only      ssh, the admin screen 8443, provisioning 443 on 10.2.0.10, SIP over TLS 5061, desk-phone audio
 #   out                    call audio anywhere; the engine (user asterisk) to LAN phones; LDAPS to DND-AD01 only;
 #                          DNS to the DC and the UDM; time; updates and git to the INTERNET only. Nothing else
 #                          leaves for the LAN: no pivot from this box to any other hospital system.
+#                          The call relay (user turnserver) answers its callers and sends to 10.2.0.11 udp 10000-10999
+#                          and NOTHING else - not the LAN, not the internet, not this box's own services on loopback.
 #
 # Load with vm/firewall.sh (auto-rollback after 5 minutes unless confirmed), never with nft -f by hand.
 
@@ -19,6 +22,7 @@ define DC         = 10.10.0.201
 define DNS        = { 10.10.0.201, 10.2.0.1 }
 define PHONE_SITE = 10.2.0.11
 define PROV       = 10.2.0.10
+define RELAY      = 10.2.0.12
 
 table inet pmc_pbx {
   chain input {
@@ -31,6 +35,9 @@ table inet pmc_pbx {
     # the browser phone, from any network (internet included, through the UDM forward)
     ip daddr $PHONE_SITE tcp dport 443 accept
     ip daddr $PHONE_SITE udp dport 10000-10999 accept
+    # the call relay, from any network, through the UDM forward of 103.144.157.236
+    ip daddr $RELAY tcp dport { 443, 3478 } accept
+    ip daddr $RELAY udp dport 3478 accept
 
     # hospital only
     # desk phones' audio arrives at the engine's own address (10.2.0.10), not the phone site's; review 14 Oct 2026
@@ -48,6 +55,11 @@ table inet pmc_pbx {
 
   chain output {
     type filter hook output priority 0; policy drop;
+    # the call relay first, before the loopback rule: its replies, its relayed audio to the engine, and nothing else.
+    # A flaw in coturn's own peer rules (CVE-2026-27624 was one) ends here.
+    meta skuid "turnserver" ct state established,related accept
+    meta skuid "turnserver" ip daddr $PHONE_SITE udp dport 10000-10999 accept
+    meta skuid "turnserver" counter reject
     oif lo accept
     ct state established,related accept
     meta l4proto { icmp, ipv6-icmp } accept

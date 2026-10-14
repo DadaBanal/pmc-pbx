@@ -125,6 +125,7 @@ test('browser phone: role, credentials, phone book, linking, and the /ws gate', 
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.ext, webExt); assert.equal(r.json.wsPath, '/ws');
   assert.ok(typeof r.json.password === 'string' && r.json.password.length >= 16);
+  assert.deepEqual(r.json.iceServers, [], 'no relay in config.json: no relay offered, calls go direct as before');
   // linked to a desk phone instead: refused, with the reason
   r = await request(A, 'PUT', '/api/users/nurse', { cookie: adminC, body: { ext: '3901' } });
   r = await request(A, 'GET', '/api/softphone', { cookie: nurseC });
@@ -174,4 +175,68 @@ test('browser phone: role, credentials, phone book, linking, and the /ws gate', 
   await request(A, 'PUT', '/api/users/nurse', { cookie: adminC, body: { disabled: true } });
   w = await upgrade(A, { cookie: nurseC });
   assert.equal(w.status, 401, 'disabled');
+});
+
+// ------------------------------------------------------------------------------------------- the call relay, 14 Oct 2026
+test('call relay: time-limited TURN credentials, checked against openssl, on both routes; config refuses bad values', { skip, timeout: 60000 }, async () => {
+  const RELAY = require('../lib/relay');
+  const { execFileSync } = require('child_process');
+  // the credential, against an independent HMAC (openssl, not Node)
+  const cfgR = { relay: { host: 'relay.test', ttlSeconds: 3600 } };
+  const ice = RELAY.iceServers(cfgR, 'shared-secret-1', '3904', 1760000000000);
+  assert.equal(ice.length, 1);
+  assert.equal(ice[0].username, (1760000000 + 3600) + ':3904');
+  const viaOpenssl = execFileSync('openssl', ['dgst', '-sha1', '-hmac', 'shared-secret-1', '-binary'], { input: ice[0].username }).toString('base64');
+  assert.equal(ice[0].credential, viaOpenssl, 'coturn REST credential: base64 HMAC-SHA1 of the username');
+  assert.notEqual(RELAY.iceServers(cfgR, 'shared-secret-2', '3904', 1760000000000)[0].credential, viaOpenssl, 'control: another secret, another credential');
+  assert.deepEqual(ice[0].urls, ['turn:relay.test:3478?transport=udp', 'turn:relay.test:3478?transport=tcp', 'turns:relay.test:443?transport=tcp']);
+  assert.deepEqual(RELAY.iceServers({}, 'x', '3904'), [], 'no relay configured');
+  assert.deepEqual(RELAY.iceServers(cfgR, '', '3904'), [], 'no secret yet');
+  assert.match(RELAY.iceServers(cfgR, 's', '39;04<x>')[0].username, /^\d+:3904x$/, 'only the extension\'s characters reach the username');
+  const sec = {};
+  assert.equal(RELAY.ensureSecret(cfgR, sec), 1); const first = sec.turn;
+  assert.match(first, /^[0-9a-f]{64}$/);
+  assert.equal(RELAY.ensureSecret(cfgR, sec), 0); assert.equal(sec.turn, first, 'made once, then kept');
+  assert.equal(RELAY.ensureSecret({}, {}), 0, 'no relay configured: no secret made');
+
+  // config.json is checked
+  // (makeEnv loads the config it writes, so a bad value throws there)
+  for (const [relay, why] of [[{ host: 'not a name' }, /relay\.host/], [{ host: 'relay.test', ttlSeconds: 30 }, /ttlSeconds/], [{ host: 'relay.test', ttlSeconds: 'x' }, /ttlSeconds/]]) {
+    assert.throws(() => makeEnv({ relay }), why);
+  }
+  const okEnv = makeEnv({ relay: { host: 'relay.test' } });
+  try { assert.equal(okEnv.cfg.relay.ttlSeconds, 43200, 'default: 12 hours'); } finally { okEnv.cleanup(); }
+
+  // the server: the phone's credentials carry the relay, and /api/relay refreshes it; Apply made the secret
+  const env = makeEnv({ relay: { host: 'relay.test', ttlSeconds: 3600 } });
+  const users = auth.loadUsers(env.cfg.usersFile);
+  auth.setPassword(users, 'admin', 'AdminPassw0rd!', 'admin', 'test');
+  auth.setPassword(users, 'nurse', 'NursePassw0rd!', 'phone', 'test');
+  auth.saveUsers(env.cfg.usersFile, users);
+  process.env.FAKE_PJSIP_FILE = path.join(env.cfg.outDir, 'asterisk', 'pjsip_pmc.conf');
+  const srv = start(env.cfg, { log: () => {} });
+  try {
+    await listening(srv.adminServer);
+    const A = 'https://127.0.0.1:' + srv.adminServer.address().port;
+    const adminC = await login(A, 'admin', 'AdminPassw0rd!');
+    const nurseC = await login(A, 'nurse', 'NursePassw0rd!');
+    let r = await request(A, 'POST', '/api/extensions', { cookie: adminC, body: { name: 'Relay Test', dept: 'Nursing', model: 'webphone' } });
+    const ext = r.json.ext;
+    await request(A, 'PUT', '/api/users/nurse', { cookie: adminC, body: { ext } });
+    r = await request(A, 'POST', '/api/apply', { cookie: adminC });
+    assert.equal(r.status, 200, r.text);
+    const secret = JSON.parse(require('fs').readFileSync(env.cfg.secretsFile, 'utf8')).turn;
+    assert.match(secret, /^[0-9a-f]{64}$/, 'Apply made the relay secret');
+    r = await request(A, 'GET', '/api/softphone', { cookie: nurseC });
+    assert.equal(r.status, 200, r.text);
+    const s = r.json.iceServers[0];
+    assert.match(s.username, new RegExp('^[0-9]+:' + ext + '$'));
+    const exp = Number(s.username.split(':')[0]), now = Date.now() / 1000;
+    assert.ok(exp > now + 3500 && exp < now + 3700, 'expires one ttl from now');
+    assert.equal(s.credential, RELAY.credential(secret, s.username));
+    r = await request(A, 'GET', '/api/relay', { cookie: nurseC });
+    assert.equal(r.status, 200); assert.equal(r.json.iceServers[0].urls[2], 'turns:relay.test:443?transport=tcp');
+    r = await request(A, 'GET', '/api/relay');
+    assert.equal(r.status, 401, 'control: no session, no relay credentials');
+  } finally { srv.close(); env.cleanup(); delete process.env.FAKE_PJSIP_FILE; }
 });

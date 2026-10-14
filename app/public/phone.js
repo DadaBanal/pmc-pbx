@@ -109,13 +109,23 @@
     navigator.mediaDevices.addEventListener('devicechange', () => { refreshOutputs().then(ch => { if (ch) { applySink(); drawCallZone(); } }); });
   }
 
+  // ------------------------------------------------------------------ the call relay
+  // For networks that block call audio: the relay carries it over TLS on 443 (lib/relay.js). Its credentials last hours,
+  // so a page open longer fetches fresh ones; without a relay, or if the fetch fails, the call goes direct as before.
+  async function relayServers() {
+    if (S.ice && Date.now() - S.ice.at < 30 * 60 * 1000) return S.ice.servers;
+    try { S.ice = { at: Date.now(), servers: (await api('GET', '/api/relay')).iceServers || [] }; }
+    catch (e) { S.ice = { at: Date.now() - 25 * 60 * 1000, servers: (S.ice && S.ice.servers) || [] }; }
+    return S.ice.servers;
+  }
+
   // ------------------------------------------------------------------ media: one RTCPeerConnection and one <audio> per call
   function browserMedia(holder) {
     return {
       async create() {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('this browser cannot use a microphone on this page');
         const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
-        const pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+        const pc = new RTCPeerConnection({ iceServers: await relayServers(), bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
         stream.getTracks().forEach(t => pc.addTrack(t, stream));
         // its own element: with two calls up, ending one must not silence the other (before 14 Oct one element served all)
         const el = d.createElement('audio'); el.autoplay = true; el.setAttribute('playsinline', ''); holder.appendChild(el);
@@ -696,6 +706,7 @@
       return;
     }
     try { S.book = (await api('GET', '/api/phonebook')).extensions || []; } catch (e) { S.book = []; }
+    S.ice = { at: Date.now(), servers: S.creds.iceServers || [] };
     renderPhone();
     const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + S.creds.wsPath;
     S.ua = new PMCSip.UA({

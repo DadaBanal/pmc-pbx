@@ -62,6 +62,14 @@ function loadConfig(confDir) {
   // address. Per account: AD lockout is OFF on this domain (threshold 0, AD session 14 Oct 2026), so this limit is
   // the only thing between a guessed name and unlimited password tries.
   cfg.loginBanAfter = cfg.loginBanAfter || 20;
+  if (cfg.relay) {
+    // the call relay (lib/relay.js): the name phones reach it by, and how long one credential lasts
+    cfg.relay = Object.assign({ ttlSeconds: 43200 }, cfg.relay);
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(cfg.relay.host || '')) throw new Error('config.json relay.host must be the relay\'s DNS name, e.g. relay.pmcne.ph');
+    const ttl = Number(cfg.relay.ttlSeconds);
+    if (!Number.isInteger(ttl) || ttl < 600 || ttl > 86400) throw new Error('config.json relay.ttlSeconds must be a whole number from 600 to 86400');
+    cfg.relay.ttlSeconds = ttl;
+  }
   cfg.accountBanAfter = cfg.accountBanAfter || 5;
   cfg.accountBanWindowSec = cfg.accountBanWindowSec || 900;
   cfg.accountBanSec = cfg.accountBanSec || 900;

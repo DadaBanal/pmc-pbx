@@ -40,6 +40,7 @@ const phones = require('./lib/phones');
 const { readJsonOr } = require('./lib/fsx');
 const ldap = require('./lib/ldap');
 const PU = require('./lib/phoneusers');
+const RELAY = require('./lib/relay');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const COOKIE = 'pmcpbx';
@@ -51,7 +52,7 @@ async function applyChanges(cfg, store, who) {
   const problems = V.validateDirectory(dir, cfg);
   if (problems.length) return { ok: false, problems };
   const secrets = store.loadSecrets();
-  const created = G.ensureSecrets(dir, secrets);
+  const created = G.ensureSecrets(dir, secrets) + RELAY.ensureSecret(cfg, secrets);
   if (created) store.saveSecrets(secrets);
   const manifest = G.generate(cfg, dir, secrets, cfg.outDir);
   const reload = await A.reload(cfg);
@@ -227,7 +228,12 @@ function start(cfg, opts) {
       const password = getSecrets().sip[e.ext];
       if (!password) throw new HttpError(409, 'Your phone ' + e.ext + ' is not switched on yet. PMO ICT will switch it on; try again later.');
       store.audit({ who: ctx.user.name, action: 'browser phone sign-in', detail: e.ext });
-      return { ext: e.ext, name: e.name, dept: e.dept || '', password, domain: cfg.fqdn, wsPath: '/ws' };
+      return { ext: e.ext, name: e.name, dept: e.dept || '', password, domain: cfg.fqdn, wsPath: '/ws', iceServers: RELAY.iceServers(cfg, getSecrets().turn, e.ext) };
+    }],
+    // fresh relay credentials before a call, for a page that has been open longer than one lasts
+    ['GET', /^\/api\/relay$/, 'phone', ctx => {
+      if (!ctx.user.ext) throw new HttpError(404, 'No phone is linked to your sign-in yet.');
+      return { iceServers: RELAY.iceServers(cfg, getSecrets().turn, ctx.user.ext) };
     }],
     ['GET', /^\/api\/phonebook$/, 'phone', () => {
       const dir = V.normalizeDirectory(store.loadDirectory());
@@ -397,7 +403,7 @@ function start(cfg, opts) {
     // decoded and normalised before any check, so %2Fphone.html and friends are judged as what they will serve
     let np = p; try { np = path.posix.normalize(decodeURIComponent(p)); } catch (e) { return H.sendText(res, 400, 'text/plain', 'bad path'); }
     // the browser phone answers only the networks it is enabled on (when phoneNetworks is set); the admin screen is not affected
-    if (!phoneFromOk(ip) && (site === 'phone' || np === '/phone' || np === '/phone.html' || np === '/api/softphone' || np === '/api/phonebook')) {
+    if (!phoneFromOk(ip) && (site === 'phone' || np === '/phone' || np === '/phone.html' || np === '/api/softphone' || np === '/api/phonebook' || np === '/api/relay')) {
       log('phone ' + ip + ' refused: not on an enabled network (' + p + ')');
       return p.startsWith('/api/') ? H.sendJson(res, 403, { error: NOT_HERE }) : H.sendText(res, 403, 'text/plain; charset=utf-8', NOT_HERE);
     }

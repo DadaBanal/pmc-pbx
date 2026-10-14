@@ -23,7 +23,7 @@ if (problems.length) {
   process.exit(1);
 }
 const secrets = store.loadSecrets();
-const created = G.ensureSecrets(dir, secrets);
+const created = G.ensureSecrets(dir, secrets) + require('./lib/relay').ensureSecret(cfg, secrets);
 const phones = dir.extensions.filter(e => e.mac).length;
 console.log('directory: ' + dir.extensions.length + ' extensions, ' + phones + ' phones, ' + created + ' new secret(s)' + (args.check ? ' (check only, nothing written)' : ''));
 if (args.check) process.exit(0);
