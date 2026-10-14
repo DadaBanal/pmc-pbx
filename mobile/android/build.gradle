@@ -1,0 +1,5 @@
+// The one third-party piece: the Android Gradle Plugin from Google Maven (dl.google.com, checked 14 Oct 2026: 9.4.1 is
+// the newest stable; a made-up artifact there returns 404). The app itself uses only the Android framework.
+plugins {
+    id 'com.android.application' version '9.4.1' apply false
+}

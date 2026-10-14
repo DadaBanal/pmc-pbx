@@ -190,3 +190,19 @@ test('dialplan: every device a person is signed in on rings, and conference room
   for (const p of ['pmc_bridge', 'pmc_owner', 'pmc_guest']) assert.match(conf, new RegExp('^\\[' + p + '\\]$', 'm'), p + ' in confbridge.conf');
   assert.match(conf, /^end_marked=yes/m, 'the room closes when its owner leaves');
 });
+
+test('emergency calls: *99<ext> only from allowed departments and extensions, and the ringing leg is marked', () => {
+  const dir = { version: 1, extensions: [{ ext: '3903', name: 'A', dept: 'ICT' }, { ext: '3920', name: 'B', dept: 'Nursing' }, { ext: '3921', name: 'C', dept: 'Nursing' }] };
+  const dp = G.renderDialplan(dir, { ringSeconds: 25, emergency: { departments: ['ICT'], extensions: ['3920'] } });
+  const lines = dp.split('\n');
+  const at = s => lines.findIndex(l => l.includes(s));
+  const callers = lines.slice(at('[pmc-emergency-callers]') + 1).filter(l => l.startsWith('exten =>')).map(l => l.split(/[ ,]/)[2]);
+  assert.deepEqual(callers, ['3903', '3920'], 'ICT by department, 3920 by name; 3921 is not allowed');
+  const check = at('GotoIf(${DIALPLAN_EXISTS(pmc-emergency-callers,${CHANNEL(endpoint)},1)}?allowed)');
+  assert.ok(check > at('exten => _*99XXXX,1') && lines[check + 1] === ' same => n,Hangup(21)', 'checked first, refused otherwise');
+  assert.ok(at('Dial(${DEVICES},60,b(pmc-emergency-mark^s^1))') > check, 'rings every device, with the mark');
+  assert.match(dp, /^exten => s,1,Set\(PJSIP_HEADER\(add,X-PMC-Priority\)=emergency\)$/m);
+  // control: with no one allowed, the callers list is empty and every emergency call is refused
+  const none = G.renderDialplan(dir, { ringSeconds: 25, emergency: { departments: [], extensions: [] } }).split('\n');
+  assert.equal(none.slice(none.indexOf('[pmc-emergency-callers]') + 1).filter(l => l.startsWith('exten =>')).length, 0);
+});

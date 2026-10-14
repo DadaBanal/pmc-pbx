@@ -78,11 +78,39 @@
   function stopTones() { if (S.tones) { S.tones(); S.tones = null; S.toneKind = ''; } }
   // one rule for every tone: a ringing incoming call rings (softly, as call waiting, if you are talking on another);
   // otherwise an outgoing call that is ringing gives ringback; otherwise silence
+  // ------------------------------------------------------------------ the installed app (Android now, iPhone next)
+  // Inside the PMC Phone app this page hands the app what a browser cannot do: ringing while the phone is locked or the
+  // app is in the background, ringing through silent mode for an emergency call, and the earpiece / speaker / Bluetooth
+  // choice. Android gives window.PMCNative.post(json); iPhone window.webkit.messageHandlers.pmc.postMessage(obj). The app
+  // answers through window.PMCApp: routes(list, current), answer(), decline().
+  const NATIVE = (() => {
+    if (window.PMCNative && typeof window.PMCNative.post === 'function') return { kind: 'android', send: m => { try { window.PMCNative.post(JSON.stringify(m)); } catch (e) { /* app gone */ } } };
+    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pmc;
+    if (h) return { kind: 'ios', send: m => { try { h.postMessage(m); } catch (e) { /* app gone */ } } };
+    return null;
+  })();
+  function tellNative() {
+    if (!NATIVE) return;
+    const r = ringingIn()[0], tk = talking();
+    const state = r ? 'ringing' : tk.some(c => c.state === 'active') ? 'active' : tk.length ? 'connecting' : 'idle';
+    const msg = { type: 'call', state, name: r ? label(r) : '', number: r ? r.number : '', emergency: !!(r && r.emergency), waiting: !!(r && tk.length) };
+    const key = JSON.stringify(msg) + (r ? r.callId : '');
+    if (key === S.nativeKey) return;
+    S.nativeKey = key;
+    NATIVE.send(msg);
+  }
+  window.PMCApp = {
+    routes(list, current) { S.nativeRoutes = Array.isArray(list) ? list : []; S.nativeRoute = current || ''; drawCallZone(); },
+    answer() { answerRinging(false); },
+    decline() { const b = $('#in-decline'); if (b && !$('#incoming').classList.contains('hidden')) b.click(); }
+  };
+
   function syncTones() {
     const t = talking();
     const want = ringingIn().length ? (t.some(c => c.state === 'active' && !parked(c)) ? 'waiting' : 'ring')
       : t.some(c => c.dir === 'out' && c.state === 'ringing') ? 'ringback' : '';
-    if (want !== S.toneKind) { if (want) tones(want); else stopTones(); }
+    const mine = NATIVE && (want === 'ring' || want === 'waiting') ? '' : want;
+    if (mine !== S.toneKind) { if (mine) tones(mine); else stopTones(); }
   }
 
   // ------------------------------------------------------------------ where the call is heard
@@ -103,7 +131,7 @@
     if (S.sink && !S.outs.some(o => o.id === S.sink)) S.sink = '';
     return before !== S.outs.map(o => o.id + o.label).join('|');
   }
-  const canChoose = () => CAN_PICK && S.outs.length > 1;
+  const canChoose = () => (NATIVE ? (S.nativeRoutes || []).length > 1 : CAN_PICK && S.outs.length > 1);
   function applySink() { $$('#audios audio').forEach(el => { if (el.setSinkId) el.setSinkId(S.sink || '').catch(() => {}); }); }
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', () => { refreshOutputs().then(ch => { if (ch) { applySink(); drawCallZone(); } }); });
@@ -419,13 +447,14 @@
       ctl.push(btn('resume', 'play', 'Resume', undefined, busy));
     }
     const out = ready && canChoose() ? '<label class="ctl out">' + icon('speaker') + '<span>Sound</span><select id="outsel" aria-label="Play the call on">' +
-      S.outs.map(o => '<option value="' + esc(o.id) + '"' + ((S.sink ? o.id === S.sink : o.id === 'default') ? ' selected' : '') + '>' + esc(o.label) + '</option>').join('') + '</select></label>' : '';
+      (NATIVE ? (S.nativeRoutes || []).map(o => '<option value="' + esc(o.id) + '"' + (o.id === S.nativeRoute ? ' selected' : '') + '>' + esc(o.label) + '</option>')
+        : S.outs.map(o => '<option value="' + esc(o.id) + '"' + ((S.sink ? o.id === S.sink : o.id === 'default') ? ' selected' : '') + '>' + esc(o.label) + '</option>')).join('') + '</select></label>' : '';
     const hints = [];
     if (ready && other && other.state === 'active' && !parked(f)) {
       hints.push(isConf(f) || isConf(other) ? 'Merge adds ' + esc(label(isConf(f) ? other : f)) + ' to the conference.' :
         '<b>Transfer</b> connects ' + esc(label(other)) + ' and ' + esc(label(f)) + ' and takes you off the call. <b>Merge</b> puts all three of you on one call.');
     }
-    if (ready && TOUCH && !canChoose()) hints.push('This browser plays calls on the loudspeaker. Earphones or a headset keep a call private.');
+    if (ready && TOUCH && !NATIVE && !canChoose()) hints.push('This browser plays calls on the loudspeaker. Earphones or a headset keep a call private.');
     z.innerHTML =
       (other ? '<button type="button" class="otherline" id="olswap"' + (ready && other.state === 'active' && !busy ? '' : ' disabled') + ' aria-label="' + esc(stateText(other) + ': ' + label(other) + '. Switch to this call') + '">' +
         '<span class="ol-state">' + esc(stateText(other)) + '</span><b>' + esc(label(other)) + '</b>' +
@@ -450,7 +479,8 @@
     on('connect', () => connect(other, f));
     on('merge', merge);
     const sel = $('#outsel');
-    if (sel) sel.onchange = () => { S.sink = sel.value === 'default' ? '' : sel.value; store.set(OUT, S.sink); applySink(); say('Playing the call on ' + sel.options[sel.selectedIndex].text + '.'); };
+    if (sel && NATIVE) sel.onchange = () => { S.nativeRoute = sel.value; NATIVE.send({ type: 'route', id: sel.value }); say('Playing the call on ' + sel.options[sel.selectedIndex].text + '.'); };
+    else if (sel) sel.onchange = () => { S.sink = sel.value === 'default' ? '' : sel.value; store.set(OUT, S.sink); applySink(); say('Playing the call on ' + sel.options[sel.selectedIndex].text + '.'); };
     $$('#dtmf button').forEach(b => b.onclick = () => f.dtmf(b.dataset.k));
     tick();
   }
@@ -607,6 +637,7 @@
     const t = talking();
     d.title = ringingIn().length ? 'Incoming call - PMC Phone' : t.length ? 'On call - PMC Phone' : 'PMC Phone';
     drawCallZone();
+    tellNative();
   }
   function explain(c) {
     const who = label(c);
@@ -629,7 +660,9 @@
     const fresh = S.ringing !== c || $('#incoming').classList.contains('hidden');
     S.ringing = c;
     const who = c.name || nameFor(c.number) || 'Unknown caller';
-    $('#in-title').textContent = waiting ? 'Call waiting' : 'Incoming call';
+    $('#in-title').textContent = c.emergency ? 'EMERGENCY CALL' : waiting ? 'Call waiting' : 'Incoming call';
+    $('#incoming').classList.toggle('emergency', !!c.emergency);
+    tellNative();
     $('#in-who').innerHTML = esc(who) + (c.number ? '<br><span class="mono">' + esc(c.number) + '</span>' : '');
     $('#in-answer').classList.toggle('hidden', waiting);
     $('#in-hold').classList.toggle('hidden', !waiting);
@@ -725,6 +758,7 @@
       drawRecent();
     });
     S.ua.start();
+    if (NATIVE) NATIVE.send({ type: 'ready', ext: S.creds.ext, name: S.creds.name });
     window.addEventListener('beforeunload', () => { if (S.ua) S.ua.stop(); });
     if ('Notification' in window && Notification.permission === 'default') {
       d.addEventListener('click', () => { try { Notification.requestPermission(); } catch (e) { /* not offered */ } }, { once: true });

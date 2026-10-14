@@ -503,3 +503,21 @@ test('ringing on several devices: a CANCEL with Reason cause=200 is "answered el
   assert.equal(c2.reason, 'missed', 'control: no Reason header, a missed call');
   await ua.stop();
 });
+
+test('an emergency call is recognised only by the exact mark the engine adds', async () => {
+  const srv = harness({ password: 'pw-1234567' });
+  const ua = uaFor(srv);
+  ua.start(); await until(() => ua.state === 'registered');
+  const marked = id => inviteText(id).replace('CSeq: 10 INVITE\r\n', 'CSeq: 10 INVITE\r\nX-PMC-Priority: emergency\r\n');
+  let got = null; ua.on('incoming', c => { got = c; });
+  srv.push(marked('em-1')); await until(() => got && got.callId === 'em-1');
+  assert.equal(got.emergency, true);
+  got.decline();
+  srv.push(inviteText('em-2')); await until(() => got.callId === 'em-2');
+  assert.equal(got.emergency, false, 'control: no mark, an ordinary call');
+  got.decline();
+  srv.push(inviteText('em-3').replace('CSeq: 10 INVITE\r\n', 'CSeq: 10 INVITE\r\nX-PMC-Priority: emergency-ish\r\n'));
+  await until(() => got.callId === 'em-3');
+  assert.equal(got.emergency, false, 'control: a near miss is not an emergency');
+  await ua.stop();
+});

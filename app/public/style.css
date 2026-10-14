@@ -378,6 +378,9 @@ dialog#pal::backdrop{background:rgb(10 12 18/.35);-webkit-backdrop-filter:blur(3
 .in-ring .ic{width:32px;height:32px}
 .in-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
 .in-actions button{min-width:150px}
+.incoming.emergency .incoming-box{box-shadow:0 0 0 3px var(--bad),var(--l2-shadow)}
+.incoming.emergency h2{color:var(--bad);letter-spacing:1px}
+.incoming.emergency .in-ring{background:var(--bad-bg);color:var(--bad)}
 @media (max-width:480px){.in-actions{flex-direction:column;align-items:stretch} .in-actions button{min-width:0;width:100%}}
 @media (prefers-reduced-motion:no-preference){.in-ring{animation:ringpulse 1.2s ease-in-out infinite}}
 @keyframes ringpulse{0%,100%{box-shadow:0 0 0 0 var(--ok-bg)}50%{box-shadow:0 0 0 16px transparent}}

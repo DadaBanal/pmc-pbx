@@ -189,3 +189,70 @@ jobs:
       - name: server log
         if: always()
         run: cat /tmp/server.log 2>/dev/null || echo "no server log"
+
+  android:
+    name: Android app - build the APK, check its signature and permissions
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: release key, when the repository holds it
+        env:
+          KS: ${{ secrets.PMC_ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then
+            printf '%s' "$KS" | base64 -d > "$RUNNER_TEMP/pmc-phone.p12"
+            echo "PMC_ANDROID_KEYSTORE=$RUNNER_TEMP/pmc-phone.p12" >> "$GITHUB_ENV"
+            echo "signing with the release key"
+          else
+            echo "no release key secret: debug-signed build"
+          fi
+
+      - name: build (Gradle and the Android SDK from the runner image; the only download is the Android Gradle Plugin)
+        working-directory: mobile/android
+        env:
+          PMC_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.PMC_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          gradle --version | grep -E '^(Gradle|Kotlin|JVM)'
+          if [ -n "${PMC_ANDROID_KEYSTORE:-}" ]; then gradle --no-daemon --stacktrace assembleRelease; else gradle --no-daemon --stacktrace assembleDebug; fi
+
+      - name: check the APK
+        run: |
+          APK=$(find mobile/android/app/build/outputs/apk -name '*.apk' | head -1)
+          [ -n "$APK" ] || { echo "no APK was built"; exit 1; }
+          ls -l "$APK"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" verify --print-certs "$APK" | head -4
+          "$BT/aapt2" dump badging "$APK" | grep -E "^package|sdkVersion|targetSdkVersion|application-label:" | head -6
+          "$BT/aapt2" dump badging "$APK" | grep -c "uses-permission" | sed 's/^/permissions declared: /'
+          # the app must only ever load the phone site
+          unzip -p "$APK" classes.dex | grep -ac "phone.pmcne.ph" | sed 's/^/phone site references in the code: /'
+          mkdir -p dist && cp "$APK" dist/pmc-phone.apk
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pmc-phone-android
+          path: dist/pmc-phone.apk
+          retention-days: 30
+
+  ios:
+    name: iPhone app - generate the project and build it for the simulator (no signing until PMC's Apple membership)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: XcodeGen from Homebrew (2.46.0, MIT; checked 14 Oct 2026)
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: generate and build
+        working-directory: mobile/ios
+        run: |
+          xcodebuild -version
+          xcodegen generate
+          xcodebuild -project PMCPhone.xcodeproj -scheme PMCPhone -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' -configuration Debug CODE_SIGNING_ALLOWED=NO build | tail -25
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -path '*Debug-iphonesimulator/PMCPhone.app' -maxdepth 6 | head -1)
+          [ -n "$APP" ] || { echo "no app was built"; exit 1; }
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' -c 'Print :NSMicrophoneUsageDescription' "$APP/Info.plist"

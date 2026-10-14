@@ -342,6 +342,8 @@
       c.remoteCseq = cseqOf(invite).n;
       c.number = userOf(uriOf(c.remoteUri));
       c.name = nameOf(c.remoteUri);
+      // an emergency call (dialplan *99<ext>): the phone apps ring through silent and Do Not Disturb for it
+      c.emergency = /^\s*emergency\s*$/i.test(hdr(invite, 'x-pmc-priority'));
       if (this.dnd || live.length >= this.maxCalls) {
         this.respond(invite, 486, 'Busy Here', { toTag: c.localTag });
         this.emit('rejected', c, this.dnd ? 'do not disturb' : 'busy');

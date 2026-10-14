@@ -238,6 +238,18 @@ function renderDialplan(dir, cfg) {
   L.push(' same => n,Hangup()');
   L.push(' same => n(guest),ConfBridge(pmc${OWNER},pmc_bridge,pmc_guest)');
   L.push(' same => n,Hangup()');
+  // emergency call: *99<ext>, only from the departments and extensions config.json allows; the ringing legs carry
+  // X-PMC-Priority: emergency (added by the pre-dial handler on each outgoing channel)
+  L.push('; emergency call *99<ext>: allowed callers only; the phone apps ring through silent and Do Not Disturb');
+  L.push('exten => _*99XXXX,1,NoOp(PMC EMERGENCY call ${CALLERID(num)} -> ${EXTEN:3})');
+  L.push(' same => n,GotoIf(${DIALPLAN_EXISTS(pmc-emergency-callers,${CHANNEL(endpoint)},1)}?allowed)');
+  L.push(' same => n,Hangup(21)');
+  L.push(' same => n(allowed),Set(DEVICES=${PJSIP_DIAL_CONTACTS(${EXTEN:3})})');
+  L.push(' same => n,GotoIf($["${DEVICES}" = ""]?unavail)');
+  L.push(' same => n,Dial(${DEVICES},60,b(pmc-emergency-mark^s^1))');
+  L.push(' same => n,Hangup()');
+  L.push(' same => n(unavail),Hangup(20)');
+  L.push('');
   L.push('; extension to extension: every device the person is signed in on rings (a browser on the PC and one on');
   L.push('; the mobile both ring; Dial(PJSIP/ext) rings only the first one the engine finds)');
   L.push('exten => _[1-8]XXX,1,NoOp(PMC call ${CALLERID(num)} -> ${EXTEN})');
@@ -249,6 +261,17 @@ function renderDialplan(dir, cfg) {
   L.push(' same => n,Hangup()');
   L.push(' same => n(busy),VoiceMail(${EXTEN}@pmc,b)');
   L.push(' same => n,Hangup()');
+  L.push('');
+  L.push('[pmc-emergency-mark]');
+  L.push('exten => s,1,Set(PJSIP_HEADER(add,X-PMC-Priority)=emergency)');
+  L.push(' same => n,Return()');
+  L.push('');
+  L.push('; who may make an emergency call: config.json emergency { departments, extensions }');
+  L.push('[pmc-emergency-callers]');
+  const em = (cfg && cfg.emergency) || { departments: [], extensions: [] };
+  const allowed = new Set(em.extensions.map(String));
+  for (const e of dir.extensions) if (em.departments.includes(e.dept)) allowed.add(e.ext);
+  for (const x of Array.from(allowed).sort()) L.push('exten => ' + x + ',1,NoOp(may make emergency calls)');
   L.push('');
   return L.join('\n');
 }

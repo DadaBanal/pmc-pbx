@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing: the keystore and its password come from CI secrets (PMC_ANDROID_KEYSTORE is a file path). Without
+// them CI builds a debug-signed APK instead, which still installs but cannot update one signed with the release key.
+def ks = System.getenv('PMC_ANDROID_KEYSTORE')
+def run = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
+
+android {
+    namespace = 'ph.pmcne.phone'
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = 'ph.pmcne.phone'
+        minSdk = 28
+        targetSdk = 36
+        versionCode = run
+        versionName = '1.0.' + run
+    }
+
+    signingConfigs {
+        release {
+            if (ks) {
+                storeFile = file(ks)
+                storePassword = System.getenv('PMC_ANDROID_KEYSTORE_PASSWORD')
+                keyAlias = 'pmc-phone'
+                keyPassword = System.getenv('PMC_ANDROID_KEYSTORE_PASSWORD')
+                storeType = 'pkcs12'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            if (ks) {
+                signingConfig = signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}

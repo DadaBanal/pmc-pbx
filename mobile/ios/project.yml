@@ -1,0 +1,32 @@
+# PMC Phone for iPhone (WS47). XcodeGen spec: CI generates PMCPhone.xcodeproj from this on GitHub's macOS runner
+# (XcodeGen 2.46.0 from Homebrew, checked 14 Oct 2026: MIT, 265,873 installs a year; made-up formula 404).
+# Dada, 14 Oct 2026: "start buildiong both", "for iphone build what we can build right now". Built for the simulator
+# without signing until PMC's Apple Developer Program membership exists; then signing, TestFlight and the App Store.
+name: PMCPhone
+options:
+  bundleIdPrefix: ph.pmcne
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  PMCPhone:
+    type: application
+    platform: iOS
+    sources: [PMCPhone]
+    info:
+      path: PMCPhone/Info.plist
+      properties:
+        CFBundleDisplayName: PMC Phone
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        NSMicrophoneUsageDescription: PMC Phone uses the microphone for your calls.
+        UIBackgroundModes: [audio]
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ph.pmcne.phone
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO

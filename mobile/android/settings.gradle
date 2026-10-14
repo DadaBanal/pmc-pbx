@@ -1,0 +1,17 @@
+// PMC Phone for Android (WS47). Built by CI on GitHub's Ubuntu runner (Gradle and the Android SDK come with it).
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'pmc-phone'
+include ':app'
