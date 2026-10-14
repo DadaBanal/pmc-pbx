@@ -227,6 +227,8 @@ jobs:
           "$BT/aapt2" dump badging "$APK" | grep -c "uses-permission" | sed 's/^/permissions declared: /'
           # the app must only ever load the phone site
           unzip -p "$APK" classes.dex | grep -ac "phone.pmcne.ph" | sed 's/^/phone site references in the code: /'
+          # only our own code: no Kotlin, AndroidX or Google libraries slipped in (build 1.0.50 carried kotlin-stdlib)
+          for p in Lkotlin/ Landroidx/ Lcom/google/; do n=$(unzip -p "$APK" classes.dex | grep -aoE "$p[A-Za-z0-9_/$]+;" | sort -u | wc -l); echo "$p types: $n"; [ "$n" = 0 ] || { echo "a library is bundled: $p"; exit 1; }; done
           mkdir -p dist && cp "$APK" dist/pmc-phone.apk
 
       - uses: actions/upload-artifact@v6
