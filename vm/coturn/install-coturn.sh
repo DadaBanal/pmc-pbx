@@ -39,14 +39,15 @@ tar -xJf "$DEB" -C "$W/deb" --strip-components=1
 diff -r "$W/gh/src" "$W/deb/src" >/dev/null || fail "GitHub and Debian copies hold different src/ trees"
 echo "  both checksums match; src/ identical in both ($(find "$W/gh/src" -type f | wc -l) files)"
 
-echo "--- 2. every option in our config exists in coturn 4.18.0's own example"
+echo "--- 2. every option in our config is one coturn 4.18.0 knows (its option table, or its example)"
 EX="$W/gh/examples/etc/turnserver.conf"
 missing=0
 for k in $(grep -vE '^\s*(#|$)' "$REPO/vm/coturn/turnserver.conf.in" | sed -E 's/[= ].*//' | sort -u); do
-  grep -qE "^#?\s*${k}([= ]|$)" "$EX" || { echo "  NOT IN THE EXAMPLE: $k"; missing=1; }
+  # its option table (the "name" strings in src/apps/relay), or its example file
+  grep -rqF "\"$k\"" "$W/gh/src/apps/relay" || grep -qE "^#?\s*${k}([= ]|$)" "$EX" || { echo "  UNKNOWN TO COTURN 4.18.0: $k"; missing=1; }
 done
-[ $missing = 0 ] || fail "an option above is not one coturn 4.18.0 documents"
-echo "  all options documented"
+[ $missing = 0 ] || fail "an option above is not one coturn 4.18.0 knows"
+echo "  all options known to coturn 4.18.0"
 grep -qE 'TURN_NO_SQLITE' "$W/gh/configure" || fail "configure no longer knows TURN_NO_SQLITE"
 
 calls=$(sudo -n /usr/sbin/asterisk -rx "core show channels count" | grep -oE '^[0-9]+ active call' | cut -d' ' -f1)

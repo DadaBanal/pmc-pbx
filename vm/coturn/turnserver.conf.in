@@ -1,7 +1,7 @@
 # PMC PBX call relay - coturn 4.18.0 on PMC-PBX01 (WS47, 14 Oct 2026; Dada: "do the call relay now").
 # Installed as /etc/coturn/turnserver.conf by vm/coturn/install-coturn.sh, which puts the shared secret in place of
 # @SECRET@ (the same value as secrets.json "turn", from which app/lib/relay.js makes each phone's credentials).
-# Every option below is in coturn 4.18.0's examples/etc/turnserver.conf.
+# Every option below is in coturn 4.18.0's option table (src/apps/relay); install-coturn.sh checks it before installing.
 #
 # Reached by phones as relay.pmcne.ph = 103.144.157.236, forwarded by the UDM to 10.2.0.12 (TCP 443, TCP+UDP 3478).
 # It relays to ONE place: the browser phone's engine address 10.2.0.11, UDP 10000-10999. The host firewall pins
@@ -26,8 +26,7 @@ stale-nonce=600
 # the wildcard *.pmcne.ph certificate the phone site uses, handed over by systemd (LoadCredential in coturn.service)
 cert=/run/credentials/coturn.service/cert.pem
 pkey=/run/credentials/coturn.service/key.pem
-no-tlsv1
-no-tlsv1_1
+# TLS 1.0 and 1.1 are off by default in 4.18 (minimum TLS 1.2; its example, "Enable older TLS/DTLS")
 cipher-list="ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305"
 
 # where it may relay: nowhere, except the engine
@@ -43,9 +42,8 @@ total-quota=200
 max-bps=64000
 
 no-cli
-no-rfc5780
-no-stun-backward-compatibility
-response-origin-only-with-rfc5780
+# RFC 5780 discovery and the old STUN MAPPED-ADDRESS are off by default in 4.18 (its example: "Strongly encouraged to
+# keep this option off"); nothing to set
 no-software-attribute
 syslog
 simple-log
