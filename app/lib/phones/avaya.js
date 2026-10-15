@@ -63,6 +63,10 @@ function settingsFile(phones, ctx) {
   L.push('## phone downloads from the file server and trusts. HTTPSRVR is not set: the phone keeps the HTTPS address');
   L.push('## typed at the handset, and this server answers HTTPS only.');
   L.push('SET TRUSTCERTS ' + trustCerts(cfg).map(c => c.name).join(','));
+  // config avayaTlsNameCheck false: the phone stops matching the server's name to its certificate (RFC 2818); the
+  // chain must still end at a root in TRUSTCERTS. First J179, 15 Oct 2026: TLS completed, then the phone sent an
+  // alert and closed before any SIP. Off only to find out whether that check is what refuses us.
+  if (cfg.avayaTlsNameCheck === false) L.push('SET TLSSRVRID 0');
   L.push('');
   L.push('## ---- time ----');
   L.push('SET SNTPSRVR ' + (cfg.ntpServer || 'pool.ntp.org'));

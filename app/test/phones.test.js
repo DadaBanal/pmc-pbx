@@ -204,3 +204,10 @@ test('Avaya settings: third-party mode, a trusted root the phone downloads, and 
   assert.ok(files.find(f => f.name === '46xxsettings.txt').body.split('\n').includes('SET TRUSTCERTS '), 'nothing named when nothing is configured');
   fs.rmSync(certs, { recursive: true, force: true });
 });
+
+test('Avaya: the server-name check is on unless config turns it off', () => {
+  const d = mixed(); const secrets = { sip: {}, prov: {} }; G.ensureSecrets(d, secrets);
+  const body = c => G.phoneFiles(Object.assign({}, cfg, c), d, secrets).find(f => f.name === '46xxsettings.txt').body;
+  assert.doesNotMatch(body({}), /TLSSRVRID/, 'default: the phone checks the name');
+  assert.match(body({ avayaTlsNameCheck: false }), /^SET TLSSRVRID 0$/m);
+});
