@@ -57,6 +57,10 @@ function settingsFile(phones, ctx) {
   L.push('## ---- media security: SRTP, and the two settings Asterisk needs ----');
   L.push('SET MEDIAENCRYPTION 1');
   L.push('SET SDPCAPNEG 0');
+  L.push('## First J179, 15 Oct 2026, no audio: its crypto line carried UNENCRYPTED_SRTCP, Asterisk refused it');
+  L.push('## ("Unsupported crypto parameters"), and sent the phone no RTP. ENCRYPT_SRTCP 1 drops that flag (Avaya:');
+  L.push('## "Specifies whether RTCP packets are encrypted", default 0).');
+  L.push('SET ENCRYPT_SRTCP 1');
   L.push('');
   L.push('## ---- the root certificate the SIP server\'s chain ends at ----');
   L.push('## First J179: every TLS connection to 5061 ended "tlsv1 alert unknown ca". TRUSTCERTS names PEM files the');

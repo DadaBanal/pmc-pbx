@@ -229,3 +229,10 @@ test('Avaya background for every handset: in the shared part, served once; a bad
   assert.doesNotMatch(files.find(f => f.name === '46xxsettings.txt').body, /BACKGROUND_IMAGE/, 'control: a missing picture is not named');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('Avaya: SRTCP is encrypted, so the phone never offers UNENCRYPTED_SRTCP, which Asterisk refuses', () => {
+  const d = mixed(); const secrets = { sip: {}, prov: {} }; G.ensureSecrets(d, secrets);
+  const s = G.phoneFiles(cfg, d, secrets).find(f => f.name === '46xxsettings.txt').body;
+  assert.ok(s.split('\n').includes('SET ENCRYPT_SRTCP 1'));
+  assert.ok(s.split('\n').includes('SET MEDIAENCRYPTION 1'));
+});
