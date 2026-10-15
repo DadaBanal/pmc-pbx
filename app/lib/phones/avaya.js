@@ -85,7 +85,9 @@ function settingsFile(phones, ctx) {
   L.push('## ---- quick extension panel ----');
   L.push('## The phone subscribes to this list and puts a key on screen for each extension in it, lit by its');
   L.push('## call state (Cisco BroadWorks J100 guide, Busy Lamp Field). The list is [' + PANEL + '] in pjsip_pmc.conf.');
-  L.push('SET BLF_LIST_URI "sips:' + PANEL + '@' + host + '"');
+  // No scheme: the phone puts its own in front. With "sips:" here, all four J179s subscribed to user "sips"
+  // (Asterisk, 15 Oct 2026: "Extension 'sips' does not exist in context 'pmc-internal'").
+  L.push('SET BLF_LIST_URI "' + PANEL + '@' + host + '"');
   L.push('');
   L.push('## ---- time ----');
   L.push('SET SNTPSRVR ' + (cfg.ntpServer || 'pool.ntp.org'));

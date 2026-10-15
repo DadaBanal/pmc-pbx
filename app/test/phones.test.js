@@ -247,7 +247,8 @@ test('quick extension panel: Asterisk publishes the list the Avaya subscribes to
   const items = (block.split('\n\n')[0].match(/^list_item=(\d+)$/mg) || []).map(l => l.split('=')[1]);
   assert.deepEqual(items, d.extensions.map(e => e.ext).sort(), 'every extension, in number order');
   const s = G.phoneFiles(cfg, d, secrets).find(f => f.name === '46xxsettings.txt').body.split('\n');
-  assert.ok(s.includes('SET BLF_LIST_URI "sips:' + G.PANEL + '@' + cfg.fqdn + '"'), 'the phone subscribes to that same list');
+  assert.ok(s.includes('SET BLF_LIST_URI "' + G.PANEL + '@' + cfg.fqdn + '"'), 'the phone subscribes to that same list');
+  assert.ok(!s.some(l => /^SET BLF_LIST_URI "sips?:/.test(l)), 'no scheme: the phone adds its own, and a second one made it subscribe to "sips"');
   for (const l of ['SET MSGNUM *97', 'SET PSTN_VM_NUM *97', 'SET SUBSCRIBE_LIST_NON_AVAYA "message-summary"']) assert.ok(s.includes(l), 'missing ' + l);
   // a chosen panel keeps its order and drops numbers that do not exist; never more than 48
   assert.deepEqual(G.panelList(d, { panelExtensions: ['3901', '9999', '1101'] }), ['3901', '1101']);
