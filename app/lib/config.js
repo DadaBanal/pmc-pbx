@@ -18,6 +18,11 @@ function loadConfig(confDir) {
   cfg.phoneImagesDir = cfg.phoneImagesDir || path.join(confDir, 'phone-images');
   // CA certificates handsets download and trust (Avaya TRUSTCERTS)
   cfg.phoneCertsDir = cfg.phoneCertsDir || path.join(confDir, 'phone-certs');
+  if (cfg.voicemailNotify !== undefined) {
+    const v = cfg.voicemailNotify;
+    if (!v || typeof v !== 'object' || (v.departments !== undefined && !Array.isArray(v.departments)) || (v.extensions !== undefined && !Array.isArray(v.extensions)) ||
+        (v.intervalSec !== undefined && !(Number.isInteger(v.intervalSec) && v.intervalSec >= 5))) throw new Error('config.json voicemailNotify must be { "departments": ["PMO"], "extensions": [], "intervalSec": 15 }');
+  }
   if (cfg.panelExtensions !== undefined && !(Array.isArray(cfg.panelExtensions) && cfg.panelExtensions.every(x => /^\d{4}$/.test(String(x))))) throw new Error('config.json panelExtensions must be a list of extension numbers like ["6666","3903"]');
   if (cfg.avayaBackgroundAll !== undefined && !/^[A-Za-z0-9._-]{1,60}\.jpg$/.test(String(cfg.avayaBackgroundAll))) throw new Error('config.json avayaBackgroundAll must be a file name ending .jpg in phone-images');
   if (cfg.avayaBackgrounds !== undefined) {

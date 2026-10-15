@@ -8,6 +8,8 @@
  *   node admin.js check                     validate directory.json
  *   node admin.js apply                     generate config and reload the engine, as the Apply button does
  *   node admin.js addext <dept> <model> <name...>   add an extension, next free number in that department
+ *   node admin.js vmwebhook                 save the Teams Workflow address for voicemail notices (PMC_PBX_WEBHOOK or prompt)
+ *   node admin.js vmtest [ext]              post a test voicemail notice to that address
  *   node admin.js adddept <name> <from> <to>        add a department and its number range
  *   node admin.js addphone <dept> <model> <ext> <mac> <name...>   add a desk phone on a chosen number
  *   node admin.js link <user> <ext|none>    link a sign-in to one extension (the browser phone), or unlink
@@ -82,6 +84,25 @@ async function password(prompt) {
       const version = store.saveDirectory(dir, 'cli', 'add extension', e.ext + ' ' + e.name + ' (' + e.model + ')');
       console.log('extension ' + e.ext + ' "' + e.name + '" (' + e.model + ', ' + e.dept + ') added, directory version ' + version + '. Run apply.');
       break;
+    }
+    case 'vmwebhook': {
+      // the Teams Workflow address voicemail notices are posted to; a secret, so it lives in secrets.json
+      const url = (process.env.PMC_PBX_WEBHOOK || await password('Teams Workflow webhook address: ')).trim();
+      let u; try { u = new URL(url); } catch (e) { console.error('not an address'); process.exit(1); }
+      if (u.protocol !== 'https:') { console.error('must be https'); process.exit(1); }
+      const secrets = store.loadSecrets(); secrets.voicemailWebhook = url; store.saveSecrets(secrets);
+      store.audit({ who: 'cli', action: 'set voicemail webhook', detail: u.host });
+      console.log('voicemail webhook saved for ' + u.host + '. Run vmtest to post a test card.');
+      break;
+    }
+    case 'vmtest': {
+      const VM = require('./lib/vmnotify');
+      const url = (store.loadSecrets() || {}).voicemailWebhook;
+      if (!url) { console.error('no voicemail webhook set; run vmwebhook first'); process.exit(1); }
+      const msg = { callerid: '"PMC PBX test" <0000>', origtime: String(Math.floor(Date.now() / 1000)), duration: '0' };
+      const r = await VM.httpsPost(url, VM.card(msg, a1 || '6666', 'test notice - no voicemail was left'));
+      console.log(r.ok ? 'posted: HTTP ' + r.status : 'FAILED: ' + (r.status || r.error));
+      process.exit(r.ok ? 0 : 1);
     }
     case 'adddept': {
       // a department and its number range (Dada, 15 Oct 2026: PMO Support is 6666, outside every range then)

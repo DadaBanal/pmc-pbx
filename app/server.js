@@ -132,6 +132,10 @@ function start(cfg, opts) {
     }
   }, 30000);
   if (sweep.unref) sweep.unref();
+  // voicemail notices to the PMO Teams chat (lib/vmnotify.js); only when config voicemailNotify is set
+  const vmNotifier = cfg.voicemailNotify && !opts.noVoicemailNotify
+    ? require('./lib/vmnotify').createNotifier(cfg, { loadDirectory: () => V.normalizeDirectory(store.loadDirectory()), getSecrets, log }).start()
+    : null;
   // every local account or phone user that points at an extension
   function linksTo(ext) {
     const out = auth.loadUsers(cfg.usersFile).users.filter(u => u.ext === ext).map(u => u.name);
@@ -581,6 +585,7 @@ function start(cfg, opts) {
     publicServer, adminServer, phoneServer, store,
     close() {
       clearInterval(sweep);
+      if (vmNotifier) vmNotifier.stop();
       for (const w of liveWs) { w.socket.destroy(); w.up.destroy(); }
       for (const s of [publicServer, adminServer, phoneServer].filter(Boolean)) { if (s.closeAllConnections) s.closeAllConnections(); s.close(); }
     }
