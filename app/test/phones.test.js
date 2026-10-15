@@ -65,7 +65,10 @@ test('each vendor gets the files it asks for, and only those', () => {
 
   const files = G.phoneFiles(cfg, d, secrets);
   const names = files.map(f => f.name).sort();
-  assert.deepEqual(names, ['001565aaaa01.cfg', '001565bbbb01.cfg', '46xxsettings.txt', 'phonebook.xml'].sort());
+  assert.deepEqual(names, ['001565aaaa01.cfg', '001565bbbb01.cfg', '46xxsettings.txt', 'J100Supgrade.txt', 'phonebook.xml'].sort());
+  assert.equal(files.find(f => f.name === 'J100Supgrade.txt').auth, 'lan');
+  assert.match(files.find(f => f.name === 'J100Supgrade.txt').body, /^GET 46xxsettings\.txt$/m, 'the upgrade file sends the phone on to its settings');
+  assert.doesNotMatch(files.find(f => f.name === 'J100Supgrade.txt').body, /\.bin\b|APPNAME/i, 'and offers no firmware');
   assert.equal(files.find(f => f.name === '46xxsettings.txt').auth, 'lan');
   assert.equal(files.find(f => f.name === '001565aaaa01.cfg').auth, 'per-mac');
   assert.equal(files.find(f => f.name === '001565aaaa01.cfg').mac, '001565aaaa01');
@@ -117,7 +120,7 @@ test('generate writes every file, an index saying how each is guarded, and count
   assert.equal(m.phones, 3, 'three handsets have a MAC; the software phone does not');
   assert.equal(m.extensions, 4);
   assert.deepEqual(m.vendors, { Yealink: 2, Avaya: 1 });
-  assert.equal(m.files, 4);
+  assert.equal(m.files, 5);
 
   const index = JSON.parse(fs.readFileSync(path.join(out, 'phones', 'index.json'), 'utf8'));
   assert.equal(index['46xxsettings.txt'].auth, 'lan');

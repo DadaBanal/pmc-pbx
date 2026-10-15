@@ -203,7 +203,11 @@ test('Avaya 46xxsettings.txt: no password from the hospital network, refused fro
       assert.equal(r.status, 200, r.text);
       const secrets = JSON.parse(fs.readFileSync(b.env.cfg.secretsFile, 'utf8'));
       assert.equal(secrets.prov.c81fead7b058, undefined, 'an Avaya handset is given no provisioning password');
-      return await request(b.P, 'GET', '/prov/46xxsettings.txt');
+      // the J100 asks for the upgrade file first; it must be reachable on the same terms
+      const up = await request(b.P, 'GET', '/prov/J100Supgrade.txt');
+      const settings = await request(b.P, 'GET', '/prov/46xxsettings.txt');
+      assert.equal(up.status, settings.status, 'the upgrade file and the settings are guarded alike');
+      return settings;
     } finally { b.stop(); }
   };
   const ok = await fetchSettings(['127.0.0.0/8']);
