@@ -14,6 +14,13 @@ function loadConfig(confDir) {
   cfg.usersFile = path.join(cfg.secretsDir, 'users.json');
   cfg.phoneUsersFile = path.join(confDir, 'phone-users.json');
   cfg.secretsFile = path.join(cfg.secretsDir, 'secrets.json');
+  // pictures a desk phone may show (Avaya backgrounds), and which handset shows which: { "<mac>": "<file>.jpg" }
+  cfg.phoneImagesDir = cfg.phoneImagesDir || path.join(confDir, 'phone-images');
+  if (cfg.avayaBackgrounds !== undefined) {
+    const ok = cfg.avayaBackgrounds && typeof cfg.avayaBackgrounds === 'object' && !Array.isArray(cfg.avayaBackgrounds) &&
+      Object.entries(cfg.avayaBackgrounds).every(([m, f]) => /^[0-9a-f]{12}$/.test(m) && /^[A-Za-z0-9._-]{1,60}\.jpg$/.test(String(f)));
+    if (!ok) throw new Error('config.json avayaBackgrounds must map a MAC (12 lower-case hex) to a file name ending .jpg, e.g. {"c81fead7b058": "pmo-support.jpg"}');
+  }
   cfg.historyDir = path.join(cfg.dataDir, 'history');
   cfg.auditFile = path.join(cfg.dataDir, 'audit.jsonl');
   cfg.certFile = cfg.certFile || path.join(cfg.secretsDir, 'cert.pem');

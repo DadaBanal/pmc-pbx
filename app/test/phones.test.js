@@ -141,3 +141,32 @@ test('every driver tells an engineer what to type at the handset', () => {
     assert.ok(notes.every(n => typeof n === 'string' && n.length), d.id + ' notes are strings');
   }
 });
+
+// Dada, 15 Oct 2026, for 6666 PMO Support: "pls add this as the wallpaper". One handset shows its own picture;
+// a picture that is missing or not a JPEG is left out rather than half-served.
+test('Avaya background: the named handset fetches and shows its picture; a bad or missing picture is left out', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmcpbx-img-'));
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 7)]);
+  fs.writeFileSync(path.join(dir, 'ward.jpg'), jpeg);
+  fs.writeFileSync(path.join(dir, 'fake.jpg'), Buffer.from('not a jpeg'));
+  const secrets = { sip: {}, prov: {} };
+  const run = map => {
+    const c = Object.assign({}, cfg, { phoneImagesDir: dir, avayaBackgrounds: map });
+    const d = mixed(); G.ensureSecrets(d, secrets);
+    return G.phoneFiles(c, d, secrets);
+  };
+  let files = run({ ccddee001122: 'ward.jpg' });
+  const settings = files.find(f => f.name === '46xxsettings.txt').body;
+  assert.match(settings, /^SET BACKGROUND_IMAGE "ward\.jpg"$/m);
+  assert.match(settings, /^SET BACKGROUND_IMAGE_DISPLAY ward\.jpg$/m);
+  const pic = files.find(f => f.name === 'ward.jpg');
+  assert.ok(pic, 'the picture is served'); assert.equal(pic.auth, 'lan'); assert.equal(pic.type, 'image/jpeg');
+  assert.ok(Buffer.compare(pic.body, jpeg) === 0, 'byte for byte');
+  // controls: a missing file and a file that is not a JPEG give no picture and no setting
+  for (const name of ['absent.jpg', 'fake.jpg']) {
+    files = run({ ccddee001122: name });
+    assert.ok(!files.some(f => f.name === name), name + ' must not be served');
+    assert.doesNotMatch(files.find(f => f.name === '46xxsettings.txt').body, /BACKGROUND_IMAGE/, name + ' must not be named');
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});

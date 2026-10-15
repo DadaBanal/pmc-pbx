@@ -80,6 +80,8 @@ function settingsFile(phones, ctx) {
       L.push(label);
       L.push('SET PHNNUMOFSA 1');
       L.push('SET PHONE_LABEL "' + String(e.name).replace(/"/g, '') + '"');
+      const bg = backgroundFor(e, cfg);
+      if (bg) { L.push('SET BACKGROUND_IMAGE "' + bg.name + '"'); L.push('SET BACKGROUND_IMAGE_DISPLAY ' + bg.name); }
       L.push('GOTO END');
       L.push('');
     });
@@ -87,6 +89,23 @@ function settingsFile(phones, ctx) {
   }
   L.push('');
   return { name: '46xxsettings.txt', body: L.join('\n'), type: 'text/plain' };
+}
+
+/*
+ * A handset's own background picture (Dada, 15 Oct 2026, for 6666 PMO Support: "pls add this as the wallpaper").
+ * Avaya: BACKGROUND_IMAGE names the files the phone fetches, BACKGROUND_IMAGE_DISPLAY the one it shows (IP Office
+ * 12.3 "J100 Phone Background Image Controls"). JPEG only, at most 256 KB, 320 x 240 on a J179 (pbxbook, tek-tips,
+ * tonyfernandeztech agree). A picture that is missing, not a JPEG or too big is left out, never half-served.
+ */
+const MAX_BG = 256 * 1024;
+function backgroundFor(e, cfg) {
+  const name = (cfg.avayaBackgrounds || {})[e.mac];
+  if (!name) return null;
+  const file = require('path').join(cfg.phoneImagesDir || '', name);
+  let body;
+  try { body = require('fs').readFileSync(file); } catch (err) { return null; }
+  if (body.length > MAX_BG || body[0] !== 0xff || body[1] !== 0xd8) return null;
+  return { name, body, type: 'image/jpeg' };
 }
 
 function upgradeFile() {
@@ -107,7 +126,12 @@ module.exports = {
   // five 404s on /prov/J100Supgrade.txt, no request for the settings). Avaya: "The Avaya-provided upgrade file
   // includes a line that tells the phones to GET 46xxsettings.txt". Ours carries only that line: no firmware is
   // named, so nothing is ever flashed from here.
-  sharedFiles: (phones, ctx) => (phones.length ? [upgradeFile(), settingsFile(phones, ctx)] : []),
+  sharedFiles: (phones, ctx) => {
+    if (!phones.length) return [];
+    const pictures = new Map();
+    for (const e of phones) { const bg = backgroundFor(e, ctx.cfg); if (bg) pictures.set(bg.name, bg); }
+    return [upgradeFile(), settingsFile(phones, ctx), ...pictures.values()];
+  },
   setupNotes: e => ([
     'Firmware: the handset must carry the Open SIP load, not an Aura or IP Office one. Flash it first.',
     'File server: ' + e.url.replace(/\/$/, '') + ' serves 46xxsettings.txt; set it under Admin, default access code 27238.',
