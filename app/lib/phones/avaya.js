@@ -79,6 +79,13 @@ function settingsFile(phones, ctx) {
   L.push('## OPUS control under "Codecs and DTMF" but its settings-file spelling was not measured.');
   L.push('## SET ENABLE_OPUS 0');
   L.push('');
+  const all = backgroundAll(cfg);
+  if (all) {
+    L.push('## ---- background picture, every handset ----');
+    L.push('SET BACKGROUND_IMAGE "' + all.name + '"');
+    L.push('SET BACKGROUND_IMAGE_DISPLAY ' + all.name);
+    L.push('');
+  }
   if (phones.length) {
     L.push('## ---- per handset ----');
     phones.forEach((e, i) => {
@@ -113,8 +120,14 @@ function settingsFile(phones, ctx) {
  */
 const MAX_BG = 256 * 1024;
 function backgroundFor(e, cfg) {
-  const name = (cfg.avayaBackgrounds || {})[e.mac];
-  if (!name) return null;
+  return picture((cfg.avayaBackgrounds || {})[e.mac], cfg);
+}
+// every Avaya handset (Dada, 15 Oct 2026: "also add the wall paper on all of it"); a per-MAC picture still wins
+function backgroundAll(cfg) {
+  return picture(cfg.avayaBackgroundAll, cfg);
+}
+function picture(name, cfg) {
+  if (!name || !/^[A-Za-z0-9._-]{1,60}\.jpg$/.test(String(name))) return null;
   const file = require('path').join(cfg.phoneImagesDir || '', name);
   let body;
   try { body = require('fs').readFileSync(file); } catch (err) { return null; }
@@ -157,6 +170,7 @@ module.exports = {
   sharedFiles: (phones, ctx) => {
     if (!phones.length) return [];
     const pictures = new Map();
+    const all = backgroundAll(ctx.cfg); if (all) pictures.set(all.name, all);
     for (const e of phones) { const bg = backgroundFor(e, ctx.cfg); if (bg) pictures.set(bg.name, bg); }
     return [upgradeFile(), settingsFile(phones, ctx), ...trustCerts(ctx.cfg), ...pictures.values()];
   },

@@ -18,6 +18,7 @@ function loadConfig(confDir) {
   cfg.phoneImagesDir = cfg.phoneImagesDir || path.join(confDir, 'phone-images');
   // CA certificates handsets download and trust (Avaya TRUSTCERTS)
   cfg.phoneCertsDir = cfg.phoneCertsDir || path.join(confDir, 'phone-certs');
+  if (cfg.avayaBackgroundAll !== undefined && !/^[A-Za-z0-9._-]{1,60}\.jpg$/.test(String(cfg.avayaBackgroundAll))) throw new Error('config.json avayaBackgroundAll must be a file name ending .jpg in phone-images');
   if (cfg.avayaBackgrounds !== undefined) {
     const ok = cfg.avayaBackgrounds && typeof cfg.avayaBackgrounds === 'object' && !Array.isArray(cfg.avayaBackgrounds) &&
       Object.entries(cfg.avayaBackgrounds).every(([m, f]) => /^[0-9a-f]{12}$/.test(m) && /^[A-Za-z0-9._-]{1,60}\.jpg$/.test(String(f)));

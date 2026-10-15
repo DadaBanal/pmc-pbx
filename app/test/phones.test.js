@@ -211,3 +211,21 @@ test('Avaya: the server-name check is on unless config turns it off', () => {
   assert.doesNotMatch(body({}), /TLSSRVRID/, 'default: the phone checks the name');
   assert.match(body({ avayaTlsNameCheck: false }), /^SET TLSSRVRID 0$/m);
 });
+
+// Dada, 15 Oct 2026: "also add the wall paper on all of it". One picture for every Avaya handset.
+test('Avaya background for every handset: in the shared part, served once; a bad name is left out', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pmcpbx-all-'));
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(100, 1)]);
+  fs.writeFileSync(path.join(dir, 'all.jpg'), jpeg);
+  const d = mixed(); const secrets = { sip: {}, prov: {} }; G.ensureSecrets(d, secrets);
+  const run = name => G.phoneFiles(Object.assign({}, cfg, { phoneImagesDir: dir, avayaBackgroundAll: name }), d, secrets);
+  let files = run('all.jpg');
+  const s = files.find(f => f.name === '46xxsettings.txt').body;
+  const shared = s.split('## ---- per handset ----')[0];
+  assert.match(shared, /^SET BACKGROUND_IMAGE "all\.jpg"$/m, 'before the per-handset branches, so every phone gets it');
+  assert.match(shared, /^SET BACKGROUND_IMAGE_DISPLAY all\.jpg$/m);
+  assert.equal(files.filter(f => f.name === 'all.jpg').length, 1, 'served once');
+  files = run('missing.jpg');
+  assert.doesNotMatch(files.find(f => f.name === '46xxsettings.txt').body, /BACKGROUND_IMAGE/, 'control: a missing picture is not named');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
