@@ -176,7 +176,31 @@ function renderPjsip(dir, cfg, sec) {
     L.push('[' + e.ext + '](' + (web ? 'pmc-aor-webrtc' : 'pmc-aor') + ')');
     L.push('');
   }
+  const panel = panelList(dir, cfg);
+  if (panel.length) {
+    // The quick extension panel (Dada, 15 Oct 2026: "a quick extension panel"). A J100 subscribes to one list
+    // (BLF_LIST_URI) and puts a key on screen for each entry, lit by its call state. Asterisk resource list
+    // subscriptions (RLS): type, event, list_item, full_state, notification_batch_interval per the Asterisk docs.
+    L.push('[' + PANEL + ']');
+    L.push('type=resource_list');
+    L.push('event=dialog');
+    panel.forEach(x => L.push('list_item=' + x));
+    L.push('full_state=yes');
+    L.push('notification_batch_interval=500');
+    L.push('');
+  }
   return L.join('\n');
+}
+
+// Which extensions the panel shows: config panelExtensions if set, otherwise every extension in number order.
+// Avaya shows at most 48 busy indicators ("A maximum of 48 Busy indicators are supported", J100 SIP readme).
+const PANEL = 'pmc-panel';
+const PANEL_MAX = 48;
+function panelList(dir, cfg) {
+  const known = new Set(dir.extensions.map(e => e.ext));
+  const want = Array.isArray(cfg.panelExtensions) ? cfg.panelExtensions.map(String).filter(x => known.has(x))
+    : dir.extensions.map(e => e.ext).sort();
+  return want.slice(0, PANEL_MAX);
 }
 
 // Mailboxes for every extension with voicemail on. Before 14 Oct 2026 there were none, so the dialplan's VoiceMail()
@@ -276,4 +300,4 @@ function renderDialplan(dir, cfg) {
   return L.join('\n');
 }
 
-module.exports = { ensureSecrets, generate, phoneFiles, byDriver, renderPjsip, renderDialplan, renderVoicemail, renderRtp, voicemailPin, webrtcMediaAddress };
+module.exports = { ensureSecrets, generate, phoneFiles, byDriver, renderPjsip, renderDialplan, renderVoicemail, renderRtp, voicemailPin, webrtcMediaAddress, panelList, PANEL };

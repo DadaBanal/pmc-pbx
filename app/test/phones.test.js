@@ -236,3 +236,21 @@ test('Avaya: SRTCP is encrypted, so the phone never offers UNENCRYPTED_SRTCP, wh
   assert.ok(s.split('\n').includes('SET ENCRYPT_SRTCP 1'));
   assert.ok(s.split('\n').includes('SET MEDIAENCRYPTION 1'));
 });
+
+// Dada, 15 Oct 2026: "that one and a quick extension panel".
+test('quick extension panel: Asterisk publishes the list the Avaya subscribes to; voicemail key and lamp', () => {
+  const d = mixed(); const secrets = { sip: {}, prov: {} }; G.ensureSecrets(d, secrets);
+  const pj = G.renderPjsip(d, cfg, secrets);
+  const block = pj.split('[' + G.PANEL + ']')[1];
+  assert.ok(block, 'the resource list is written');
+  assert.match(block, /^type=resource_list$/m); assert.match(block, /^event=dialog$/m); assert.match(block, /^full_state=yes$/m);
+  const items = (block.split('\n\n')[0].match(/^list_item=(\d+)$/mg) || []).map(l => l.split('=')[1]);
+  assert.deepEqual(items, d.extensions.map(e => e.ext).sort(), 'every extension, in number order');
+  const s = G.phoneFiles(cfg, d, secrets).find(f => f.name === '46xxsettings.txt').body.split('\n');
+  assert.ok(s.includes('SET BLF_LIST_URI "sips:' + G.PANEL + '@' + cfg.fqdn + '"'), 'the phone subscribes to that same list');
+  for (const l of ['SET MSGNUM *97', 'SET PSTN_VM_NUM *97', 'SET SUBSCRIBE_LIST_NON_AVAYA "message-summary"']) assert.ok(s.includes(l), 'missing ' + l);
+  // a chosen panel keeps its order and drops numbers that do not exist; never more than 48
+  assert.deepEqual(G.panelList(d, { panelExtensions: ['3901', '9999', '1101'] }), ['3901', '1101']);
+  const big = { extensions: Array.from({ length: 60 }, (_, i) => ({ ext: String(1000 + i) })) };
+  assert.equal(G.panelList(big, {}).length, 48);
+});

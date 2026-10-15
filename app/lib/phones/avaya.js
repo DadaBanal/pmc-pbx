@@ -24,6 +24,9 @@
  * whether the shared file can be served behind HTTP basic auth. Both are marked in the file itself.
  */
 
+// The panel's list name; generate.js writes the list itself under the same name (a test holds the two together).
+const PANEL = 'pmc-panel';
+
 const MODELS = {
   J179: { label: 'Avaya J179 desk phone (Open SIP)', accounts: 8, lineKeys: 8, blf: true },
   J169: { label: 'Avaya J169 desk phone (Open SIP)', accounts: 8, lineKeys: 8, blf: true },
@@ -71,6 +74,18 @@ function settingsFile(phones, ctx) {
   // chain must still end at a root in TRUSTCERTS. First J179, 15 Oct 2026: TLS completed, then the phone sent an
   // alert and closed before any SIP. Off only to find out whether that check is what refuses us.
   if (cfg.avayaTlsNameCheck === false) L.push('SET TLSSRVRID 0');
+  L.push('');
+  L.push('## ---- voicemail key and message lamp ----');
+  L.push('## Avaya: MSGNUM is the number the Message key dials. Cisco BroadWorks J100 guide: PSTN_VM_NUM, and');
+  L.push('## SUBSCRIBE_LIST_NON_AVAYA "message-summary" for the lamp. *97 is this PBX\'s voicemail.');
+  L.push('SET MSGNUM *97');
+  L.push('SET PSTN_VM_NUM *97');
+  L.push('SET SUBSCRIBE_LIST_NON_AVAYA "message-summary"');
+  L.push('');
+  L.push('## ---- quick extension panel ----');
+  L.push('## The phone subscribes to this list and puts a key on screen for each extension in it, lit by its');
+  L.push('## call state (Cisco BroadWorks J100 guide, Busy Lamp Field). The list is [' + PANEL + '] in pjsip_pmc.conf.');
+  L.push('SET BLF_LIST_URI "sips:' + PANEL + '@' + host + '"');
   L.push('');
   L.push('## ---- time ----');
   L.push('SET SNTPSRVR ' + (cfg.ntpServer || 'pool.ntp.org'));
