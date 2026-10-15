@@ -46,14 +46,23 @@ function settingsFile(phones, ctx) {
   L.push('SET SIPDOMAIN ' + host);
   L.push('SET ENFORCE_SIPS_URI 1');
   L.push('');
+  L.push('## ---- not an Avaya call server ----');
+  L.push('## First J179, 15 Oct 2026: without these it asked for Avaya PPM (/axis/services/PPM) and sat on');
+  L.push('## "Acquiring Service". Values from Cisco BroadWorks\' Avaya J100 partner configuration guide.');
+  L.push('SET ENABLE_AVAYA_ENVIRONMENT 0');
+  L.push('SET DISCOVER_AVAYA_ENVIRONMENT 0');
+  L.push('SET ENABLE_IPOFFICE 0');
+  L.push('SET ENABLE_3PCC_ENVIRONMENT 1');
+  L.push('');
   L.push('## ---- media security: SRTP, and the two settings Asterisk needs ----');
   L.push('SET MEDIAENCRYPTION 1');
   L.push('SET SDPCAPNEG 0');
   L.push('');
-  L.push('## ---- where this file came from, so the phone comes back for it ----');
-  L.push('SET HTTPSRVR ' + host);
-  L.push('SET HTTPDIR ' + (cfg.avayaDir || 'prov'));
-  L.push('SET TRUSTCERTS ' + (cfg.avayaTrustCerts || ''));
+  L.push('## ---- the root certificate the SIP server\'s chain ends at ----');
+  L.push('## First J179: every TLS connection to 5061 ended "tlsv1 alert unknown ca". TRUSTCERTS names PEM files the');
+  L.push('## phone downloads from the file server and trusts. HTTPSRVR is not set: the phone keeps the HTTPS address');
+  L.push('## typed at the handset, and this server answers HTTPS only.');
+  L.push('SET TRUSTCERTS ' + trustCerts(cfg).map(c => c.name).join(','));
   L.push('');
   L.push('## ---- time ----');
   L.push('SET SNTPSRVR ' + (cfg.ntpServer || 'pool.ntp.org'));
@@ -76,8 +85,9 @@ function settingsFile(phones, ctx) {
     L.push('');
     phones.forEach((e, i) => {
       const label = 'PH' + (i + 1);
-      L.push('# ' + label + ': ' + e.ext + ' ' + e.name + (e.dept ? ' (' + e.dept + ')' : ''));
-      L.push(label);
+      // "##" is a comment and "#" a GOTO target (pbxbook, IP Office set files); a bare label line is not valid
+      L.push('## ' + label + ': ' + e.ext + ' ' + e.name + (e.dept ? ' (' + e.dept + ')' : ''));
+      L.push('# ' + label);
       L.push('SET PHNNUMOFSA 1');
       L.push('SET PHONE_LABEL "' + String(e.name).replace(/"/g, '') + '"');
       const bg = backgroundFor(e, cfg);
@@ -85,7 +95,7 @@ function settingsFile(phones, ctx) {
       L.push('GOTO END');
       L.push('');
     });
-    L.push('END');
+    L.push('# END');
   }
   L.push('');
   return { name: '46xxsettings.txt', body: L.join('\n'), type: 'text/plain' };
@@ -106,6 +116,20 @@ function backgroundFor(e, cfg) {
   try { body = require('fs').readFileSync(file); } catch (err) { return null; }
   if (body.length > MAX_BG || body[0] !== 0xff || body[1] !== 0xd8) return null;
   return { name, body, type: 'image/jpeg' };
+}
+
+// CA certificates the phones must trust, from config avayaTrustCerts ("a.pem,b.pem") in <conf>/phone-certs. Only a
+// readable PEM certificate is named or served; anything else is left out.
+function trustCerts(cfg) {
+  const names = String(cfg.avayaTrustCerts || '').split(',').map(s => s.trim()).filter(n => /^[A-Za-z0-9._-]{1,60}\.pem$/.test(n));
+  const out = [];
+  for (const name of names) {
+    let body;
+    try { body = require('fs').readFileSync(require('path').join(cfg.phoneCertsDir || '', name), 'utf8'); } catch (err) { continue; }
+    if (!/^-----BEGIN CERTIFICATE-----/.test(body.trim())) continue;
+    out.push({ name, body, type: 'application/x-pem-file' });
+  }
+  return out;
 }
 
 function upgradeFile() {
@@ -130,7 +154,7 @@ module.exports = {
     if (!phones.length) return [];
     const pictures = new Map();
     for (const e of phones) { const bg = backgroundFor(e, ctx.cfg); if (bg) pictures.set(bg.name, bg); }
-    return [upgradeFile(), settingsFile(phones, ctx), ...pictures.values()];
+    return [upgradeFile(), settingsFile(phones, ctx), ...trustCerts(ctx.cfg), ...pictures.values()];
   },
   setupNotes: e => ([
     'Firmware: the handset must carry the Open SIP load, not an Aura or IP Office one. Flash it first.',

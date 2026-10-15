@@ -16,6 +16,8 @@ function loadConfig(confDir) {
   cfg.secretsFile = path.join(cfg.secretsDir, 'secrets.json');
   // pictures a desk phone may show (Avaya backgrounds), and which handset shows which: { "<mac>": "<file>.jpg" }
   cfg.phoneImagesDir = cfg.phoneImagesDir || path.join(confDir, 'phone-images');
+  // CA certificates handsets download and trust (Avaya TRUSTCERTS)
+  cfg.phoneCertsDir = cfg.phoneCertsDir || path.join(confDir, 'phone-certs');
   if (cfg.avayaBackgrounds !== undefined) {
     const ok = cfg.avayaBackgrounds && typeof cfg.avayaBackgrounds === 'object' && !Array.isArray(cfg.avayaBackgrounds) &&
       Object.entries(cfg.avayaBackgrounds).every(([m, f]) => /^[0-9a-f]{12}$/.test(m) && /^[A-Za-z0-9._-]{1,60}\.jpg$/.test(String(f)));

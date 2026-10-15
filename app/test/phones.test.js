@@ -104,7 +104,7 @@ test('Avaya: one shared settings file, a branch per handset, and no secret in it
   assert.match(f, /^SET SDPCAPNEG 0$/m, 'the setting Asterisk needs');
   assert.match(f, /^IF \$MACADDR SEQ CCDDEE001122 GOTO PH1$/m, 'Avaya compares upper-case MACs');
   assert.match(f, /^SET PHONE_LABEL "Ward Desk"$/m);
-  assert.match(f, /^END$/m);
+  assert.match(f, /^# END$/m, 'a GOTO target is a "#" line');
   // the identity is typed at the handset, so no password may appear in a file every Avaya phone can fetch
   assert.ok(!f.includes(secrets.sip['1102']), 'the SIP password must never be in the shared file');
   for (const v of Object.values(secrets.sip).concat(Object.values(secrets.prov))) assert.ok(!f.includes(v));
@@ -169,4 +169,38 @@ test('Avaya background: the named handset fetches and shows its picture; a bad o
     assert.doesNotMatch(files.find(f => f.name === '46xxsettings.txt').body, /BACKGROUND_IMAGE/, name + ' must not be named');
   }
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// First J179, 15 Oct 2026: it asked for Avaya PPM and every SIP TLS handshake ended "unknown ca"; and the per-handset
+// section was never reached because its jump target was a bare line ("#" marks a GOTO target, "##" a comment).
+test('Avaya settings: third-party mode, a trusted root the phone downloads, and GOTO targets it can find', () => {
+  const certs = fs.mkdtempSync(path.join(os.tmpdir(), 'pmcpbx-ca-'));
+  const pem = '-----BEGIN CERTIFICATE-----\nMIIBfake\n-----END CERTIFICATE-----\n';
+  fs.writeFileSync(path.join(certs, 'root.pem'), pem);
+  fs.writeFileSync(path.join(certs, 'junk.pem'), 'not a certificate');
+  const secrets = { sip: {}, prov: {} };
+  const run = list => {
+    const c = Object.assign({}, cfg, { phoneCertsDir: certs, avayaTrustCerts: list });
+    const d = mixed(); G.ensureSecrets(d, secrets);
+    return G.phoneFiles(c, d, secrets);
+  };
+  let files = run('root.pem,junk.pem,absent.pem');
+  const s = files.find(f => f.name === '46xxsettings.txt').body;
+  for (const line of ['SET ENABLE_AVAYA_ENVIRONMENT 0', 'SET DISCOVER_AVAYA_ENVIRONMENT 0', 'SET ENABLE_IPOFFICE 0', 'SET ENABLE_3PCC_ENVIRONMENT 1', 'SET TRUSTCERTS root.pem']) {
+    assert.ok(s.split('\n').includes(line), 'missing: ' + line);
+  }
+  assert.ok(!/^SET HTTPSRVR /m.test(s), 'no HTTPSRVR: the phone keeps the HTTPS address typed at it');
+  const root = files.find(f => f.name === 'root.pem');
+  assert.ok(root && root.auth === 'lan' && root.body === pem, 'the root is served as it is');
+  assert.ok(!files.some(f => f.name === 'junk.pem' || f.name === 'absent.pem'), 'control: a non-certificate and a missing file are left out');
+  // every GOTO lands on a "# label" line, and no line is a bare word
+  const lines = s.split('\n');
+  for (const l of lines.filter(l => / GOTO | ?^GOTO /.test(l))) {
+    const target = l.trim().split(/\s+/).pop();
+    assert.ok(lines.includes('# ' + target), 'GOTO ' + target + ' has no "# ' + target + '" line');
+  }
+  for (const l of lines) assert.ok(l === '' || /^(SET|IF|GOTO|GET|ADD|#)/.test(l), 'not a valid settings line: ' + l);
+  files = run('');
+  assert.ok(files.find(f => f.name === '46xxsettings.txt').body.split('\n').includes('SET TRUSTCERTS '), 'nothing named when nothing is configured');
+  fs.rmSync(certs, { recursive: true, force: true });
 });
