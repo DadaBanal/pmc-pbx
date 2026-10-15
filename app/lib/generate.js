@@ -33,7 +33,7 @@ function byDriver(dir) {
 }
 
 // Every file the provisioning listener should be able to serve, and how each is guarded.
-// -> [{ name, body, type, auth: 'per-mac'|'shared', mac }]
+// -> [{ name, body, type, auth: 'per-mac'|'shared'|'lan', mac }]
 function phoneFiles(cfg, dir, secrets) {
   const out = [];
   const ctx = { cfg, dir, secrets };
@@ -45,7 +45,7 @@ function phoneFiles(cfg, dir, secrets) {
       }
     }
     for (const f of (d.sharedFiles ? d.sharedFiles(list, ctx) : [])) {
-      out.push(Object.assign({ auth: d.auth === 'per-mac' ? 'per-mac' : 'shared', mac: null, driver: d.id }, f));
+      out.push(Object.assign({ auth: d.auth === 'per-mac' || d.auth === 'lan' ? d.auth : 'shared', mac: null, driver: d.id }, f));
     }
   }
   return out;

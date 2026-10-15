@@ -8,7 +8,8 @@
  *   perPhoneFile(e, ctx)      one file for that handset, fetched with that handset's own password (Yealink)
  *   sharedFiles(phones, ctx)  files every phone of this vendor fetches (Avaya's 46xxsettings.txt; Yealink's
  *                             phonebook). A shared file must never carry a per-phone secret
- *   auth                      'per-mac' or 'shared': how the provisioning listener guards those files
+ *   auth                      'per-mac', 'shared' (any handset's own password) or 'lan' (no password, provNetworks
+ *                             only, for handsets that cannot send one): how the provisioning listener guards them
  *   models                    model id -> { label, accounts, lineKeys, blf }
  *   setupNotes(e)             what an engineer types at the handset the first time
  *

@@ -191,6 +191,10 @@ function start(cfg, opts) {
       } else if (entry.auth === 'shared') {
         // one file for every phone of that vendor; it carries no per-phone secret, but still never anonymous
         if (!creds || !/^[0-9a-f]{12}$/.test(creds.user) || !provAuthOk(req, creds.user)) return deny();
+      } else if (entry.auth === 'lan') {
+        // a handset that sends no password (Avaya): the file carries no secret, and only the hospital's own networks
+        // get it (Dada, 15 Oct 2026: "yes to the network only"). No provNetworks set: nobody gets it.
+        if (!cfg.provNetworks || !H.inNetworks(ip, cfg.provNetworks)) return finish(403, 'text/plain', 'forbidden', url);
       } else {
         return finish(404, 'text/plain', 'not found', url);
       }

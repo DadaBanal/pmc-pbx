@@ -93,7 +93,10 @@ module.exports = {
   id: 'avaya',
   vendor: 'Avaya',
   models: MODELS,
-  auth: 'shared',           // one file for every Avaya phone; it holds no per-phone secret
+  // One file for every Avaya phone; it holds no per-phone secret, and the handset sends no password for it (no
+  // per-phone file, so no provisioning password is ever made for an Avaya MAC). Served without a password, to the
+  // networks in config provNetworks only (Dada, 15 Oct 2026: "yes to the network only").
+  auth: 'lan',
   perPhoneFile: null,
   sharedFiles: (phones, ctx) => (phones.length ? [settingsFile(phones, ctx)] : []),
   setupNotes: e => ([

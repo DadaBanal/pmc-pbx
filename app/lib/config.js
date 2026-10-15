@@ -37,6 +37,12 @@ function loadConfig(confDir) {
     const okCidr = c => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d{1,2})$/.exec(c); return !!m && m.slice(1, 5).every(o => +o <= 255) && +m[5] <= 32; };
     if (!Array.isArray(cfg.phoneNetworks) || !cfg.phoneNetworks.every(okCidr)) throw new Error('config.json phoneNetworks must be a list like ["10.2.0.0/22"] (octets 0-255, prefix 0-32)');
   }
+  // Networks that may fetch a provisioning file guarded 'lan' (Avaya's 46xxsettings.txt) without a password
+  // (Dada, 15 Oct 2026: "yes to the network only"). Unset: no one may.
+  if (cfg.provNetworks !== undefined) {
+    const okCidr = c => { const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)\/(\d{1,2})$/.exec(c); return !!m && m.slice(1, 5).every(o => +o <= 255) && +m[5] <= 32; };
+    if (!Array.isArray(cfg.provNetworks) || !cfg.provNetworks.every(okCidr)) throw new Error('config.json provNetworks must be a list like ["10.2.0.0/22"] (octets 0-255, prefix 0-32)');
+  }
   // the phone site (optional): { host, port, name }, e.g. 10.2.0.11, 443, phone.pmcne.ph
   if (cfg.phoneSite) {
     cfg.phoneSite = Object.assign({ port: 443 }, cfg.phoneSite);

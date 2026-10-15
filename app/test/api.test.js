@@ -189,3 +189,27 @@ test('repeated failed sign-ins for one name cool that name down, and only that n
   // control: the address is not banned, so another name still gets a normal answer
   assert.equal((await request(A, 'POST', '/api/login', { body: { name: 'someone-else', password: 'nope' } })).status, 401);
 });
+
+// Dada, 15 Oct 2026: "yes to the network only". An Avaya handset sends no password for 46xxsettings.txt, so the file
+// is served without one, to provNetworks only. Two controls must be refused: an outside network, and no setting.
+test('Avaya 46xxsettings.txt: no password from the hospital network, refused from anywhere else', { skip }, async () => {
+  const fetchSettings = async provNetworks => {
+    const b = await boot(provNetworks === undefined ? {} : { provNetworks });
+    try {
+      const login = await request(b.A, 'POST', '/api/login', { body: { name: 'admin', password: 'AdminPassw0rd!' } });
+      let r = await request(b.A, 'POST', '/api/extensions', { cookie: login.cookie, body: { name: 'PMO Support', dept: 'Nursing', model: 'J179', mac: 'C8:1F:EA:D7:B0:58' } });
+      assert.equal(r.status, 200, r.text);
+      r = await request(b.A, 'POST', '/api/apply', { cookie: login.cookie });
+      assert.equal(r.status, 200, r.text);
+      const secrets = JSON.parse(fs.readFileSync(b.env.cfg.secretsFile, 'utf8'));
+      assert.equal(secrets.prov.c81fead7b058, undefined, 'an Avaya handset is given no provisioning password');
+      return await request(b.P, 'GET', '/prov/46xxsettings.txt');
+    } finally { b.stop(); }
+  };
+  const ok = await fetchSettings(['127.0.0.0/8']);
+  assert.equal(ok.status, 200, ok.text);
+  assert.match(ok.text, /^SET SIP_CONTROLLER_LIST /m);
+  assert.match(ok.text, /^IF \$MACADDR SEQ C81FEAD7B058 GOTO PH1$/m);
+  assert.equal((await fetchSettings(['10.99.0.0/16'])).status, 403, 'control: an address outside provNetworks is refused');
+  assert.equal((await fetchSettings(undefined)).status, 403, 'control: no provNetworks set, nobody gets it');
+});

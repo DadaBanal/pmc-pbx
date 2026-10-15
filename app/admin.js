@@ -8,6 +8,8 @@
  *   node admin.js check                     validate directory.json
  *   node admin.js apply                     generate config and reload the engine, as the Apply button does
  *   node admin.js addext <dept> <model> <name...>   add an extension, next free number in that department
+ *   node admin.js adddept <name> <from> <to>        add a department and its number range
+ *   node admin.js addphone <dept> <model> <ext> <mac> <name...>   add a desk phone on a chosen number
  *   node admin.js link <user> <ext|none>    link a sign-in to one extension (the browser phone), or unlink
  *   node admin.js phoneuser <sam> <name...>  put a Windows account on the phone users list with a browser phone
  *   node admin.js phoneusers                the phone users list
@@ -79,6 +81,34 @@ async function password(prompt) {
       if (problems.length) { console.error('STOP: ' + problems.join('; ')); process.exit(1); }
       const version = store.saveDirectory(dir, 'cli', 'add extension', e.ext + ' ' + e.name + ' (' + e.model + ')');
       console.log('extension ' + e.ext + ' "' + e.name + '" (' + e.model + ', ' + e.dept + ') added, directory version ' + version + '. Run apply.');
+      break;
+    }
+    case 'adddept': {
+      // a department and its number range (Dada, 15 Oct 2026: PMO Support is 6666, outside every range then)
+      const [from, to] = [Number(a2), Number(rest[0])];
+      if (!a1 || !Number.isInteger(from) || !Number.isInteger(to)) { console.error('usage: adddept <name> <from> <to>'); process.exit(2); }
+      const dir = V.normalizeDirectory(store.loadDirectory());
+      if (dir.departments.some(d => d.name.toLowerCase() === a1.toLowerCase())) { console.error('department ' + a1 + ' exists'); process.exit(1); }
+      dir.departments.push({ name: a1, from, to });
+      const problems = V.validateDirectory(dir, cfg);
+      if (problems.length) { console.error('STOP: ' + problems.join('; ')); process.exit(1); }
+      const version = store.saveDirectory(dir, 'cli', 'add department', a1 + ' ' + from + '-' + to);
+      console.log('department ' + a1 + ' ' + from + '-' + to + ' added, directory version ' + version + '.');
+      break;
+    }
+    case 'addphone': {
+      // a desk phone on a chosen number: addphone <dept> <model> <ext> <mac> <name...>
+      const [ext, mac] = [rest[0], rest[1]];
+      const name = rest.slice(2).join(' ').trim();
+      if (!a1 || !a2 || !/^\d{4}$/.test(ext || '') || !mac || !name) { console.error('usage: addphone <dept> <model> <ext> <mac> <name...>'); process.exit(2); }
+      const dir = V.normalizeDirectory(store.loadDirectory());
+      if (dir.extensions.some(x => x.ext === ext)) { console.error('extension ' + ext + ' exists'); process.exit(1); }
+      const e = V.normalizeExtension({ ext, name, dept: a1, model: a2, mac, voicemail: true });
+      dir.extensions.push(e);
+      const problems = V.validateDirectory(dir, cfg);
+      if (problems.length) { console.error('STOP: ' + problems.join('; ')); process.exit(1); }
+      const version = store.saveDirectory(dir, 'cli', 'add extension', e.ext + ' ' + e.name + ' (' + e.model + ', ' + e.mac + ')');
+      console.log('extension ' + e.ext + ' "' + e.name + '" (' + e.model + ', ' + e.mac + ', ' + e.dept + ') added, directory version ' + version + '. Run apply.');
       break;
     }
     case 'phoneuser': {
