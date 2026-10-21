@@ -9,6 +9,11 @@ User=asterisk
 Group=asterisk
 ExecStart=/usr/sbin/asterisk -f -C /etc/asterisk/asterisk.conf
 ExecReload=/usr/sbin/asterisk -rx "core reload"
+# /run is a tmpfs: without this the folder came back root-owned after a reboot, asterisk (running as asterisk)
+# could not create asterisk.ctl, and from 16 Oct 2026 nothing could reach the engine (no Apply, no status).
+# systemd now creates /run/asterisk owned by User= at every start.
+RuntimeDirectory=asterisk
+RuntimeDirectoryMode=0755
 Restart=always
 RestartSec=5
 LimitNOFILE=65536
